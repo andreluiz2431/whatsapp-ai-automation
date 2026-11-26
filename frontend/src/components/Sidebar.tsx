@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   Bot,
   LayoutDashboard,
   LogOut,
@@ -12,7 +13,13 @@ import {
 import { AuthUser, WhatsAppState } from '../types';
 import { StatusBadge } from './StatusBadge';
 
-export type NavTab = 'dashboard' | 'conversations' | 'rules' | 'campaigns' | 'settings';
+export type NavTab =
+  | 'dashboard'
+  | 'conversations'
+  | 'rules'
+  | 'campaigns'
+  | 'settings'
+  | 'guide';
 
 interface Props {
   user: AuthUser;
@@ -30,6 +37,7 @@ const NAV_ITEMS: Array<{ id: NavTab; label: string; icon: typeof LayoutDashboard
   { id: 'rules', label: 'Fluxos & Personas IA', icon: SlidersHorizontal },
   { id: 'campaigns', label: 'Campanhas & Disparos', icon: Megaphone },
   { id: 'settings', label: 'Configurações IA', icon: Settings },
+  { id: 'guide', label: 'Manual & Sobre', icon: BookOpen },
 ];
 
 export function Sidebar({

@@ -6,6 +6,7 @@ import { AuthPage } from './pages/AuthPage';
 import { CampaignsPage } from './pages/CampaignsPage';
 import { ConversationsPage } from './pages/ConversationsPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { GuidePage } from './pages/GuidePage';
 import { RulesPage } from './pages/RulesPage';
 import { SettingsPage } from './pages/SettingsPage';
 import {
@@ -164,6 +165,7 @@ export default function App() {
           />
         )}
         {activeTab === 'settings' && <SettingsPage />}
+        {activeTab === 'guide' && <GuidePage onNavigate={setActiveTab} />}
       </main>
     </div>
   );
