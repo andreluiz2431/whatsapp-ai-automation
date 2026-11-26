@@ -15,7 +15,7 @@ RUN npm run build --prefix frontend
 COPY backend/package*.json ./backend/
 RUN npm ci --prefix backend
 COPY backend ./backend
-RUN npx --prefix backend prisma generate && npm run build --prefix backend
+RUN cd backend && npx prisma generate && npm run build
 
 # --- Imagem final de produção ---
 FROM node:22-bookworm-slim AS runner
