@@ -55,6 +55,7 @@ settingsRouter.put('/', async (req, res) => {
       defaultBatchPauseMin,
     } = req.body;
 
+    await getUserSettings(userId);
     const updated = await prisma.userSettings.update({
       where: { userId },
       data: {

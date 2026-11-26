@@ -45,13 +45,31 @@ export function SettingsPage() {
     }
   };
 
+  const loadGeminiModels = async () => {
+    try {
+      const r = await api.get<{ models: string[] }>('/settings/gemini-models');
+      setGeminiModels(r.models || []);
+    } catch {
+      // ignora
+    }
+  };
+
   useEffect(() => {
     void loadSettings();
-    api
-      .get<{ models: string[] }>('/settings/gemini-models')
-      .then((r) => setGeminiModels(r.models || []))
-      .catch(() => {});
+    void loadGeminiModels();
   }, []);
+
+  const persistSettings = async (): Promise<boolean> => {
+    if (!settings) return false;
+    const res = await api.put<{ settings: AppSettings; aiHealth: AiHealth }>(
+      '/settings',
+      settings
+    );
+    setSettings(res.settings);
+    setAiHealth(res.aiHealth);
+    void loadGeminiModels();
+    return true;
+  };
 
   const handleSave = async (e: FormEvent) => {
     e.preventDefault();
@@ -59,12 +77,7 @@ export function SettingsPage() {
     setSaving(true);
     setSavedBanner(false);
     try {
-      const res = await api.put<{ settings: AppSettings; aiHealth: AiHealth }>(
-        '/settings',
-        settings
-      );
-      setSettings(res.settings);
-      setAiHealth(res.aiHealth);
+      await persistSettings();
       setSavedBanner(true);
       setTimeout(() => setSavedBanner(false), 3500);
     } catch (err) {
@@ -78,6 +91,8 @@ export function SettingsPage() {
     setTesting(true);
     setTestResult(null);
     try {
+      // Salva automaticamente as alterações (ex: chave recém-colada) antes de testar
+      await persistSettings();
       const res = await api.post<{
         ok: boolean;
         reply?: string;
@@ -102,6 +117,7 @@ export function SettingsPage() {
     const formData = new FormData();
     formData.append('image', file);
     try {
+      await persistSettings();
       const res = await api.post<{
         ok: boolean;
         description?: string;
