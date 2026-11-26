@@ -1,5 +1,6 @@
 import {
   Bot,
+  CheckSquare,
   Eye,
   FileText,
   Megaphone,
@@ -7,6 +8,7 @@ import {
   Search,
   Send,
   Sparkles,
+  Square,
   Tag as TagIcon,
   Upload,
   User,
@@ -53,6 +55,11 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
   const [importAutoSummarize, setImportAutoSummarize] = useState(true);
   const [importing, setImporting] = useState(false);
   const [parsingImport, setParsingImport] = useState(false);
+
+  // Seleção em massa (ativar modo IA ou Manual em várias conversas)
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedBulkIds, setSelectedBulkIds] = useState<string[]>([]);
+  const [applyingBulk, setApplyingBulk] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const selectedConv =
@@ -327,6 +334,36 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
     }
   };
 
+  const toggleBulkSelect = (convId: string) => {
+    setSelectedBulkIds((prev) =>
+      prev.includes(convId)
+        ? prev.filter((id) => id !== convId)
+        : [...prev, convId]
+    );
+  };
+
+  const handleBulkMode = async (mode: 'AUTO' | 'MANUAL') => {
+    if (selectedBulkIds.length === 0 || applyingBulk) return;
+    setApplyingBulk(true);
+    try {
+      await api.patch('/conversations/bulk-mode', {
+        conversationIds: selectedBulkIds,
+        mode,
+      });
+      await loadConversations();
+      setSelectedBulkIds([]);
+      setSelectionMode(false);
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : 'Erro ao atualizar modo das conversas selecionadas.'
+      );
+    } finally {
+      setApplyingBulk(false);
+    }
+  };
+
   const filtered = conversations.filter((c) => {
     const q = search.toLowerCase();
     return (
@@ -371,6 +408,84 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
               className="w-full rounded-xl border border-slate-800 bg-slate-950 py-2 pr-3 pl-9 text-xs text-slate-200 placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
             />
           </div>
+
+          {/* Controle de Seleção em Massa */}
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setSelectionMode((prev) => {
+                  if (prev) setSelectedBulkIds([]);
+                  return !prev;
+                });
+              }}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
+                selectionMode
+                  ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40'
+                  : 'border border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <CheckSquare className="h-3.5 w-3.5" />
+              {selectionMode ? 'Sair da Seleção' : 'Selecionar Conversas'}
+            </button>
+
+            {selectionMode && filtered.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const filteredIds = filtered.map((c) => c.id);
+                  const allSelected = filteredIds.every((id) =>
+                    selectedBulkIds.includes(id)
+                  );
+                  setSelectedBulkIds(allSelected ? [] : filteredIds);
+                }}
+                className="text-[11px] font-medium text-emerald-400 hover:text-emerald-300"
+              >
+                {filtered.every((c) => selectedBulkIds.includes(c.id))
+                  ? 'Desmarcar todas'
+                  : `Selecionar todas (${filtered.length})`}
+              </button>
+            )}
+          </div>
+
+          {selectionMode && (
+            <div className="space-y-2 rounded-xl border border-emerald-500/25 bg-slate-950/90 p-2.5">
+              <div className="flex items-center justify-between text-[11px] text-slate-300">
+                <span>
+                  <strong>{selectedBulkIds.length}</strong> conversa(s) selecionada(s)
+                </span>
+                {selectedBulkIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBulkIds([])}
+                    className="text-slate-400 hover:text-white"
+                  >
+                    Limpar
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  disabled={selectedBulkIds.length === 0 || applyingBulk}
+                  onClick={() => handleBulkMode('AUTO')}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500 px-2.5 py-1.5 text-[11px] font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:opacity-40"
+                >
+                  <Bot className="h-3.5 w-3.5" />
+                  Ativar IA
+                </button>
+                <button
+                  type="button"
+                  disabled={selectedBulkIds.length === 0 || applyingBulk}
+                  onClick={() => handleBulkMode('MANUAL')}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-sky-500 px-2.5 py-1.5 text-[11px] font-semibold text-slate-950 transition hover:bg-sky-400 disabled:opacity-40"
+                >
+                  <User className="h-3.5 w-3.5" />
+                  Modo Manual
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto divide-y divide-slate-800/60">
@@ -381,20 +496,36 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
           ) : (
             filtered.map((conv) => {
               const isSelected = conv.id === selectedId;
+              const isChecked = selectedBulkIds.includes(conv.id);
               const label = conv.contact.name || conv.contact.phone;
               return (
                 <button
                   key={conv.id}
                   onClick={() => {
+                    if (selectionMode) {
+                      toggleBulkSelect(conv.id);
+                      return;
+                    }
                     setSelectedId(conv.id);
                     setShowTagsPanel(false);
                   }}
                   className={`flex w-full items-start gap-3 p-3.5 text-left transition ${
-                    isSelected
-                      ? 'bg-emerald-500/10'
-                      : 'hover:bg-slate-800/40'
+                    selectionMode && isChecked
+                      ? 'bg-emerald-500/15'
+                      : isSelected
+                        ? 'bg-emerald-500/10'
+                        : 'hover:bg-slate-800/40'
                   }`}
                 >
+                  {selectionMode && (
+                    <span className="mt-2.5 shrink-0 text-emerald-400">
+                      {isChecked ? (
+                        <CheckSquare className="h-4 w-4" />
+                      ) : (
+                        <Square className="h-4 w-4 text-slate-500" />
+                      )}
+                    </span>
+                  )}
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-800 text-xs font-bold text-emerald-300">
                     {label.slice(0, 2).toUpperCase()}
                   </div>

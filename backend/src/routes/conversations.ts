@@ -338,6 +338,48 @@ conversationsRouter.post('/:id/send', async (req, res) => {
   }
 });
 
+conversationsRouter.patch('/bulk-mode', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const rawIds = req.body?.conversationIds;
+    const mode = req.body?.mode === 'MANUAL' ? 'MANUAL' : 'AUTO';
+
+    if (!Array.isArray(rawIds) || rawIds.length === 0) {
+      res.status(400).json({ error: 'Selecione ao menos uma conversa.' });
+      return;
+    }
+
+    const conversationIds = rawIds
+      .map((v) => String(v || '').trim())
+      .filter(Boolean);
+
+    const result = await prisma.conversation.updateMany({
+      where: { id: { in: conversationIds }, userId },
+      data: { mode },
+    });
+
+    emitUserEvent(userId, 'conversation:updated', { bulk: true });
+    emitUserEvent(userId, 'dashboard:refresh', {});
+    await logActivity(
+      userId,
+      'SYSTEM',
+      `Modo ${
+        mode === 'AUTO' ? 'Automático (IA)' : 'Manual (Humano)'
+      } aplicado em massa para ${result.count} conversa(s).`,
+      'INFO'
+    );
+
+    res.json({ ok: true, updatedCount: result.count, mode });
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Erro ao atualizar modo em massa.',
+    });
+  }
+});
+
 conversationsRouter.patch('/:id/mode', async (req, res) => {
   try {
     const userId = req.user!.id;
