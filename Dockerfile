@@ -20,7 +20,7 @@ RUN cd backend && npx prisma generate && npm run build
 # --- Imagem final de produção ---
 FROM node:22-bookworm-slim AS runner
 
-RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates sqlite3 && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

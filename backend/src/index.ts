@@ -5,7 +5,7 @@ import http from 'http';
 import path from 'path';
 import { Server } from 'socket.io';
 import { config } from './config';
-import { ensureServerRecovery } from './db';
+import { ensureServerRecovery, prisma } from './db';
 import { authRouter } from './routes/auth';
 import { campaignsRouter } from './routes/campaigns';
 import { conversationsRouter } from './routes/conversations';
@@ -20,10 +20,22 @@ import {
   resolveUserFromToken,
 } from './services/authService';
 import { campaignQueueManager } from './services/campaignQueue';
+import { migrateLegacyDataForOwner } from './services/legacyMigration';
 import { whatsappManager } from './services/whatsappService';
 
 async function bootstrap(): Promise<void> {
   await ensureServerRecovery();
+
+  // Se o usuário dono (ex: alm28062001@gmail.com) já existir, migra imediatamente o backup legado
+  const owner = await prisma.user.findFirst({
+    where: config.ownerEmail
+      ? { email: config.ownerEmail }
+      : { isOwner: true },
+    select: { id: true },
+  });
+  if (owner) {
+    await migrateLegacyDataForOwner(owner.id);
+  }
 
   const allowedOrigins = [
     config.frontendUrl,

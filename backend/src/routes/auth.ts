@@ -12,6 +12,8 @@ import {
   verifyPassword,
 } from '../services/authService';
 import { logActivity } from '../services/activityLog';
+import { migrateLegacyDataForOwner } from '../services/legacyMigration';
+import { whatsappManager } from '../services/whatsappService';
 
 export const authRouter = Router();
 
@@ -87,6 +89,12 @@ authRouter.post('/register', async (req, res) => {
     });
 
     await ensureUserDefaults(user.id, isOwner);
+    if (isOwner) {
+      const mig = await migrateLegacyDataForOwner(user.id);
+      if (mig.migratedSession) {
+        void whatsappManager.getSession(user.id).connect();
+      }
+    }
     await logActivity(
       user.id,
       'SYSTEM',
@@ -116,6 +124,12 @@ authRouter.post('/login', async (req, res) => {
     }
 
     await ensureUserDefaults(user.id, user.isOwner);
+    if (user.isOwner) {
+      const mig = await migrateLegacyDataForOwner(user.id);
+      if (mig.migratedSession) {
+        void whatsappManager.getSession(user.id).connect();
+      }
+    }
     const token = signSessionToken(user.id);
     setSessionCookie(res, token);
 
@@ -167,6 +181,12 @@ authRouter.post('/google', async (req, res) => {
         },
       });
       await ensureUserDefaults(user.id, isOwner);
+      if (isOwner) {
+        const mig = await migrateLegacyDataForOwner(user.id);
+        if (mig.migratedSession) {
+          void whatsappManager.getSession(user.id).connect();
+        }
+      }
       await logActivity(
         user.id,
         'SYSTEM',
@@ -183,6 +203,12 @@ authRouter.post('/google', async (req, res) => {
         },
       });
       await ensureUserDefaults(user.id, user.isOwner);
+      if (user.isOwner) {
+        const mig = await migrateLegacyDataForOwner(user.id);
+        if (mig.migratedSession) {
+          void whatsappManager.getSession(user.id).connect();
+        }
+      }
     }
 
     const token = signSessionToken(user.id);
