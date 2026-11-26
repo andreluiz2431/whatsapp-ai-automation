@@ -1,16 +1,18 @@
 import {
   Bot,
   Eye,
+  FileText,
   Megaphone,
   MessageSquarePlus,
   Search,
   Send,
   Sparkles,
   Tag as TagIcon,
+  Upload,
   User,
   X,
 } from 'lucide-react';
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { socket } from '../lib/socket';
 import { AiRule, Conversation, Message, Tag, WhatsAppState } from '../types';
@@ -36,6 +38,21 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
   const [newPhone, setNewPhone] = useState('');
   const [newName, setNewName] = useState('');
   const [newFirstMsg, setNewFirstMsg] = useState('');
+
+  // Modal Importar Conversa Antiga
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importPhone, setImportPhone] = useState('');
+  const [importContactName, setImportContactName] = useState('');
+  const [importRawText, setImportRawText] = useState('');
+  const [importSpeakers, setImportSpeakers] = useState<string[]>([]);
+  const [importMySender, setImportMySender] = useState('');
+  const [importParsedMessages, setImportParsedMessages] = useState<
+    Array<{ sender: string; body: string; timestamp: string | null }>
+  >([]);
+  const [importMode, setImportMode] = useState<'MANUAL' | 'AUTO'>('MANUAL');
+  const [importAutoSummarize, setImportAutoSummarize] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const [parsingImport, setParsingImport] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const selectedConv =
@@ -216,6 +233,100 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
     }
   };
 
+  const applyImportPreview = (res: {
+    speakers: string[];
+    messages: Array<{ sender: string; body: string; timestamp: string | null }>;
+  }) => {
+    setImportSpeakers(res.speakers);
+    setImportParsedMessages(res.messages);
+    if (res.speakers.length > 0 && !res.speakers.includes(importMySender)) {
+      const guessedMe = res.speakers[0];
+      setImportMySender(guessedMe);
+      const other = res.speakers.find((s) => s !== guessedMe);
+      if (other && !importContactName) {
+        setImportContactName(other);
+      }
+    }
+  };
+
+  const handleImportFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setParsingImport(true);
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await api.post<{
+        speakers: string[];
+        messages: Array<{ sender: string; body: string; timestamp: string | null }>;
+      }>('/conversations/import-preview', formData);
+      applyImportPreview(res);
+    } catch (err) {
+      alert(
+        err instanceof Error ? err.message : 'Erro ao ler arquivo exportado.'
+      );
+    } finally {
+      setParsingImport(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleParseImportText = async () => {
+    if (!importRawText.trim()) return;
+    setParsingImport(true);
+    try {
+      const res = await api.post<{
+        speakers: string[];
+        messages: Array<{ sender: string; body: string; timestamp: string | null }>;
+      }>('/conversations/import-preview', { text: importRawText });
+      applyImportPreview(res);
+    } catch (err) {
+      alert(
+        err instanceof Error ? err.message : 'Erro ao interpretar conversa.'
+      );
+    } finally {
+      setParsingImport(false);
+    }
+  };
+
+  const handleConfirmImport = async (e: FormEvent) => {
+    e.preventDefault();
+    if (importParsedMessages.length === 0 && !importRawText.trim()) {
+      alert('Envie um arquivo .txt do WhatsApp ou cole o texto da conversa.');
+      return;
+    }
+    setImporting(true);
+    try {
+      const res = await api.post<{
+        conversation: Conversation;
+        importedCount: number;
+      }>('/conversations/import', {
+        phone: importPhone,
+        contactName: importContactName,
+        mySenderName: importMySender,
+        mode: importMode,
+        autoSummarize: importAutoSummarize,
+        rawText: importParsedMessages.length === 0 ? importRawText : undefined,
+        messages: importParsedMessages.length > 0 ? importParsedMessages : undefined,
+      });
+      await loadConversations();
+      if (res.conversation?.id) {
+        setSelectedId(res.conversation.id);
+      }
+      setShowImportModal(false);
+      setImportPhone('');
+      setImportContactName('');
+      setImportRawText('');
+      setImportSpeakers([]);
+      setImportMySender('');
+      setImportParsedMessages([]);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Erro ao importar conversa.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const filtered = conversations.filter((c) => {
     const q = search.toLowerCase();
     return (
@@ -230,15 +341,25 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
       {/* Coluna Esquerda: Lista de Conversas */}
       <div className="flex w-full flex-col border-b border-slate-800 lg:w-80 lg:shrink-0 lg:border-r lg:border-b-0">
         <div className="space-y-3 border-b border-slate-800 p-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <h2 className="text-base font-bold text-white">Conversas</h2>
-            <button
-              onClick={() => setShowNewModal(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25"
-            >
-              <MessageSquarePlus className="h-3.5 w-3.5" />
-              Novo Chat
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setShowImportModal(true)}
+                title="Importar conversa antiga (.txt do WhatsApp ou texto)"
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+              >
+                <Upload className="h-3.5 w-3.5 text-emerald-400" />
+                Importar
+              </button>
+              <button
+                onClick={() => setShowNewModal(true)}
+                className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/15 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25"
+              >
+                <MessageSquarePlus className="h-3.5 w-3.5" />
+                Novo
+              </button>
+            </div>
           </div>
 
           <div className="relative">
@@ -568,6 +689,211 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
           </>
         )}
       </div>
+
+      {/* Modal Importar Conversa Antiga */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+          <form
+            onSubmit={handleConfirmImport}
+            className="max-h-[90vh] w-full max-w-2xl space-y-4 overflow-y-auto rounded-2xl border border-slate-800 bg-slate-900 p-6"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="flex items-center gap-2 text-base font-bold text-white">
+                  <Upload className="h-5 w-5 text-emerald-400" />
+                  Importar Conversa Antiga do WhatsApp
+                </h3>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Traga o histórico anterior para a IA ter contexto completo quando esse cliente responder novamente.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowImportModal(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-400">
+                  WhatsApp do Contato (com DDD) *
+                </label>
+                <input
+                  required
+                  value={importPhone}
+                  onChange={(e) => setImportPhone(e.target.value)}
+                  placeholder="Ex: 5511999998888 ou 11999998888"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2 text-sm text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-400">
+                  Nome do Contato (opcional)
+                </label>
+                <input
+                  value={importContactName}
+                  onChange={(e) => setImportContactName(e.target.value)}
+                  placeholder="Detectado automaticamente se vazio"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2 text-sm text-white"
+                />
+              </div>
+            </div>
+
+            {/* Upload .txt ou Colar Texto */}
+            <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+                  <FileText className="h-4 w-4 text-emerald-400" />
+                  1. Envie o arquivo .txt do WhatsApp ou cole o texto
+                </span>
+                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25">
+                  <Upload className="h-3.5 w-3.5" />
+                  {parsingImport ? 'Lendo...' : 'Selecionar arquivo .txt'}
+                  <input
+                    type="file"
+                    accept=".txt,text/plain"
+                    onChange={handleImportFileChange}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                No WhatsApp: abra a conversa → menu (⋮) → Mais → Exportar conversa → <strong>Sem mídia</strong>.
+              </p>
+
+              <textarea
+                rows={4}
+                value={importRawText}
+                onChange={(e) => setImportRawText(e.target.value)}
+                placeholder={`Ou cole aqui no formato exportado pelo WhatsApp ou "Nome: mensagem":\n25/11/2026 14:30 - João: Olá, qual o valor?\n25/11/2026 14:31 - André: Olá João! Custa R$ 97.`}
+                className="w-full rounded-xl border border-slate-700 bg-slate-900 p-3 font-mono text-xs text-white"
+              />
+              {importRawText.trim() && (
+                <button
+                  type="button"
+                  onClick={handleParseImportText}
+                  disabled={parsingImport}
+                  className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+                >
+                  {parsingImport ? 'Interpretando...' : 'Analisar Texto Colado'}
+                </button>
+              )}
+            </div>
+
+            {/* Seleção de quem é você + Preview */}
+            {importParsedMessages.length > 0 && (
+              <div className="space-y-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-emerald-300">
+                    ✓ {importParsedMessages.length} mensagem(ns) reconhecida(s)
+                  </span>
+                  <span className="text-slate-400">
+                    {importSpeakers.length} participante(s)
+                  </span>
+                </div>
+
+                {importSpeakers.length > 0 && (
+                  <div>
+                    <p className="mb-1.5 text-xs font-semibold text-white">
+                      2. Qual destes nomes representa VOCÊ (suas mensagens enviadas)?
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {importSpeakers.map((sp) => (
+                        <button
+                          key={sp}
+                          type="button"
+                          onClick={() => {
+                            setImportMySender(sp);
+                            const other = importSpeakers.find((s) => s !== sp);
+                            if (other) setImportContactName(other);
+                          }}
+                          className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
+                            importMySender === sp
+                              ? 'border-emerald-400 bg-emerald-500 text-slate-950'
+                              : 'border-slate-700 bg-slate-900 text-slate-300 hover:text-white'
+                          }`}
+                        >
+                          {importMySender === sp ? '✓ Sou eu: ' : ''}
+                          {sp}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="max-h-32 space-y-1 overflow-y-auto rounded-lg bg-slate-950/70 p-2.5 text-[11px]">
+                  {importParsedMessages.slice(0, 5).map((m, i) => (
+                    <p key={i} className="truncate text-slate-300">
+                      <span
+                        className={
+                          m.sender === importMySender
+                            ? 'font-semibold text-sky-300'
+                            : 'font-semibold text-emerald-300'
+                        }
+                      >
+                        [{m.sender === importMySender ? 'Você' : m.sender}]:
+                      </span>{' '}
+                      {m.body}
+                    </p>
+                  ))}
+                  {importParsedMessages.length > 5 && (
+                    <p className="text-slate-500">
+                      ... e mais {importParsedMessages.length - 5} mensagem(ns)
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-400">
+                  Modo Inicial Após Importar
+                </label>
+                <select
+                  value={importMode}
+                  onChange={(e) =>
+                    setImportMode(e.target.value as 'MANUAL' | 'AUTO')
+                  }
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                >
+                  <option value="MANUAL">Manual (você revisa antes de ativar IA)</option>
+                  <option value="AUTO">Automático (IA já responde próximas msgs)</option>
+                </select>
+              </div>
+              <label className="flex cursor-pointer items-center gap-2 pt-5 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={importAutoSummarize}
+                  onChange={(e) => setImportAutoSummarize(e.target.checked)}
+                  className="accent-emerald-500"
+                />
+                Gerar resumo executivo com IA ao importar
+              </label>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowImportModal(false)}
+                className="rounded-xl border border-slate-700 px-4 py-2 text-xs font-medium text-slate-300"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={importing}
+                className="rounded-xl bg-emerald-500 px-5 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
+              >
+                {importing ? 'Importando...' : 'Importar Conversa'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Modal Iniciar Nova Conversa */}
       {showNewModal && (

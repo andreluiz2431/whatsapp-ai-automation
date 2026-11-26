@@ -1,16 +1,22 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { prisma } from '../db';
 import { emitUserEvent, logActivity } from '../services/activityLog';
 import {
   generateConversationSummary,
   resolveRuleForContact,
 } from '../services/aiService';
+import { parseWhatsAppExport } from '../services/chatImportParser';
 import {
   normalizePhoneAndJid,
   whatsappManager,
 } from '../services/whatsappService';
 
 export const conversationsRouter = Router();
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+});
 
 conversationsRouter.get('/', async (req, res) => {
   try {
@@ -104,6 +110,178 @@ conversationsRouter.post('/start', async (req, res) => {
   } catch (err) {
     res.status(500).json({
       error: err instanceof Error ? err.message : 'Erro ao iniciar conversa.',
+    });
+  }
+});
+
+conversationsRouter.post(
+  '/import-preview',
+  upload.single('file'),
+  (req, res) => {
+    try {
+      let rawText = String(req.body?.text || '');
+      if (req.file) {
+        rawText = req.file.buffer.toString('utf-8');
+      }
+      if (!rawText.trim()) {
+        res.status(400).json({
+          error: 'Envie um arquivo .txt exportado do WhatsApp ou cole o texto da conversa.',
+        });
+        return;
+      }
+
+      const parsed = parseWhatsAppExport(rawText);
+      res.json({
+        totalMessages: parsed.messages.length,
+        speakers: parsed.speakers,
+        sample: parsed.messages.slice(0, 6),
+        messages: parsed.messages,
+      });
+    } catch (err) {
+      res.status(500).json({
+        error:
+          err instanceof Error
+            ? err.message
+            : 'Erro ao interpretar arquivo de conversa.',
+      });
+    }
+  }
+);
+
+conversationsRouter.post('/import', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const {
+      phone: rawPhone,
+      contactName,
+      mySenderName,
+      mode = 'MANUAL',
+      autoSummarize = false,
+      rawText,
+      messages: providedMessages,
+    } = req.body as {
+      phone?: string;
+      contactName?: string;
+      mySenderName?: string;
+      mode?: 'AUTO' | 'MANUAL';
+      autoSummarize?: boolean;
+      rawText?: string;
+      messages?: Array<{ sender: string; body: string; timestamp?: string | null }>;
+    };
+
+    if (!rawPhone || rawPhone.replace(/\D/g, '').length < 8) {
+      res.status(400).json({
+        error: 'Informe o número de WhatsApp válido do contato (com DDD).',
+      });
+      return;
+    }
+
+    let parsedMessages = Array.isArray(providedMessages)
+      ? providedMessages
+      : [];
+
+    if (parsedMessages.length === 0 && rawText?.trim()) {
+      parsedMessages = parseWhatsAppExport(rawText).messages;
+    }
+
+    if (parsedMessages.length === 0) {
+      res.status(400).json({
+        error:
+          'Nenhuma mensagem reconhecida no texto/arquivo. Use a exportação .txt do WhatsApp ou o formato "Nome: mensagem".',
+      });
+      return;
+    }
+
+    // Limita a 1000 mensagens mais recentes por importação para manter o banco leve
+    const trimmed = parsedMessages.slice(-1000);
+    const normalizedMe = (mySenderName || '').trim().toLowerCase();
+
+    // Tenta inferir nome do contato a partir do outro participante se não informado
+    const inferredContactName =
+      contactName?.trim() ||
+      trimmed.find((m) => m.sender.trim().toLowerCase() !== normalizedMe)?.sender ||
+      null;
+
+    const { phone, jid } = normalizePhoneAndJid(rawPhone);
+    const contact = await prisma.contact.upsert({
+      where: { userId_jid: { userId, jid } },
+      update: inferredContactName ? { name: inferredContactName } : {},
+      create: { userId, phone, jid, name: inferredContactName },
+    });
+
+    const baseNow = Date.now();
+    const messageRecords = trimmed.map((m, idx) => {
+      const isMe =
+        normalizedMe.length > 0 &&
+        m.sender.trim().toLowerCase() === normalizedMe;
+      const createdAt = m.timestamp
+        ? new Date(m.timestamp)
+        : new Date(baseNow - (trimmed.length - idx) * 60 * 1000);
+
+      return {
+        direction: isMe ? 'OUTBOUND' : 'INBOUND',
+        senderType: isMe ? 'HUMAN' : 'CONTACT',
+        body: m.body.trim(),
+        status: isMe ? 'SENT' : 'DELIVERED',
+        createdAt: Number.isNaN(createdAt.getTime()) ? new Date() : createdAt,
+      };
+    });
+
+    const lastMsg = messageRecords[messageRecords.length - 1];
+
+    const conversation = await prisma.conversation.upsert({
+      where: { contactId: contact.id },
+      update: {
+        mode: mode === 'AUTO' ? 'AUTO' : 'MANUAL',
+        lastMessageAt: lastMsg.createdAt,
+        lastMessagePreview: lastMsg.body.slice(0, 120),
+      },
+      create: {
+        userId,
+        contactId: contact.id,
+        mode: mode === 'AUTO' ? 'AUTO' : 'MANUAL',
+        lastMessageAt: lastMsg.createdAt,
+        lastMessagePreview: lastMsg.body.slice(0, 120),
+        unreadCount: 0,
+      },
+    });
+
+    await prisma.message.createMany({
+      data: messageRecords.map((rec) => ({
+        conversationId: conversation.id,
+        ...rec,
+      })),
+    });
+
+    if (autoSummarize) {
+      void generateConversationSummary(userId, conversation.id).catch(() => {});
+    }
+
+    const fullConv = await prisma.conversation.findUnique({
+      where: { id: conversation.id },
+      include: {
+        contact: { include: { tags: { include: { tag: true } } } },
+        activeRule: true,
+      },
+    });
+
+    emitUserEvent(userId, 'conversation:updated', fullConv);
+    emitUserEvent(userId, 'dashboard:refresh', {});
+    await logActivity(
+      userId,
+      'WHATSAPP',
+      `Conversa com ${contact.name || contact.phone} importada (${messageRecords.length} mensagem(ns)).`,
+      'SUCCESS'
+    );
+
+    res.status(201).json({
+      conversation: fullConv,
+      importedCount: messageRecords.length,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error ? err.message : 'Erro ao importar conversa.',
     });
   }
 });

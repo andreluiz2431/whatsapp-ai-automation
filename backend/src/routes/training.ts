@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { prisma } from '../db';
 import { logActivity } from '../services/activityLog';
 import {
@@ -7,8 +8,13 @@ import {
   extractTrainingFromTranscript,
   simulateTrainingChat,
 } from '../services/aiService';
+import { parseWhatsAppExport } from '../services/chatImportParser';
 
 export const trainingRouter = Router();
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+});
 
 trainingRouter.get('/overview', async (req, res) => {
   try {
@@ -276,6 +282,57 @@ trainingRouter.post('/analyze-conversation', async (req, res) => {
         err instanceof Error
           ? err.message
           : 'Erro ao analisar histórico da conversa.',
+    });
+  }
+});
+
+trainingRouter.post('/analyze-raw', upload.single('file'), async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    let rawText = String(req.body?.text || '');
+    if (req.file) {
+      rawText = req.file.buffer.toString('utf-8');
+    }
+    const feedback = String(req.body?.feedback || '');
+    const ruleId = req.body?.ruleId ? String(req.body.ruleId) : null;
+
+    if (!rawText.trim()) {
+      res.status(400).json({
+        error: 'Envie um arquivo .txt ou cole o histórico da conversa para analisar.',
+      });
+      return;
+    }
+
+    const parsed = parseWhatsAppExport(rawText);
+    const transcript =
+      parsed.messages.length > 0
+        ? parsed.messages
+            .slice(-120)
+            .map((m) => `[${m.sender}]: ${m.body}`)
+            .join('\n')
+        : rawText.slice(-12000);
+
+    const result = await extractTrainingFromTranscript(
+      userId,
+      transcript,
+      feedback,
+      ruleId
+    );
+
+    await logActivity(
+      userId,
+      'AI',
+      `Histórico externo importado e analisado para treinamento (${result.suggestedExamples.length} exemplo(s) sugerido(s)).`,
+      'SUCCESS'
+    );
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Erro ao analisar conversa importada.',
     });
   }
 });
