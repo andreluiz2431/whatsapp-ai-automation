@@ -1,7 +1,11 @@
 import { Router } from 'express';
 import { prisma } from '../db';
 import { emitSocketEvent, logActivity } from '../services/activityLog';
-import { checkAiHealth, testAiConnection } from '../services/aiService';
+import {
+  checkAiHealth,
+  listAvailableGeminiModels,
+  testAiConnection,
+} from '../services/aiService';
 import { whatsappService } from '../services/whatsappService';
 
 export const settingsRouter = Router();
@@ -103,5 +107,14 @@ settingsRouter.post('/test-ai', async (_req, res) => {
       ok: false,
       error: err instanceof Error ? err.message : 'Erro ao testar IA.',
     });
+  }
+});
+
+settingsRouter.get('/gemini-models', async (_req, res) => {
+  try {
+    const models = await listAvailableGeminiModels();
+    res.json({ models });
+  } catch {
+    res.json({ models: [] });
   }
 });

@@ -136,31 +136,49 @@ function buildSystemPrompt(
     .join('\n');
 }
 
-async function callGemini(
+async function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function listAvailableGeminiModels(): Promise<string[]> {
+  const settings = await getEffectiveSettings();
+  const apiKey = settings.geminiApiKey || config.geminiApiKey;
+  if (!apiKey) return [];
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(
+        apiKey
+      )}`
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      models?: Array<{
+        name?: string;
+        supportedGenerationMethods?: string[];
+      }>;
+    };
+    return (data.models || [])
+      .filter(
+        (m) =>
+          m.name?.startsWith('models/gemini-') &&
+          m.supportedGenerationMethods?.includes('generateContent')
+      )
+      .map((m) => (m.name || '').replace(/^models\//, ''));
+  } catch {
+    return [];
+  }
+}
+
+async function callGeminiSingleModel(
   apiKey: string,
   model: string,
   systemPrompt: string,
-  turns: ChatTurn[]
-): Promise<string> {
-  if (!apiKey) {
-    throw new Error(
-      'GEMINI_API_KEY não configurada. Adicione sua chave gratuita do Google AI Studio em Configurações ou no .env.'
-    );
-  }
-
+  contents: Array<{ role: string; parts: Array<{ text: string }> }>
+): Promise<{ ok: true; text: string } | { ok: false; status: number; errText: string }> {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
     model
   )}:generateContent?key=${encodeURIComponent(apiKey)}`;
-
-  // Gemini espera alternância / pelo menos 1 turno user
-  const contents = turns.map((t) => ({
-    role: t.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: t.content }],
-  }));
-
-  if (contents.length === 0) {
-    contents.push({ role: 'user', parts: [{ text: 'Olá' }] });
-  }
 
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -179,7 +197,7 @@ async function callGemini(
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Erro Gemini API (${response.status}): ${errText.slice(0, 300)}`);
+    return { ok: false, status: response.status, errText };
   }
 
   const data = (await response.json()) as {
@@ -194,10 +212,93 @@ async function callGemini(
     .trim();
 
   if (!text) {
-    throw new Error('A API Gemini retornou uma resposta vazia.');
+    return {
+      ok: false,
+      status: 500,
+      errText: 'A API Gemini retornou uma resposta vazia.',
+    };
   }
 
-  return text;
+  return { ok: true, text };
+}
+
+async function callGemini(
+  apiKey: string,
+  model: string,
+  systemPrompt: string,
+  turns: ChatTurn[]
+): Promise<string> {
+  if (!apiKey) {
+    throw new Error(
+      'GEMINI_API_KEY não configurada. Adicione sua chave gratuita do Google AI Studio em Configurações ou no .env.'
+    );
+  }
+
+  // Gemini espera alternância / pelo menos 1 turno user
+  const contents = turns.map((t) => ({
+    role: t.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: t.content }],
+  }));
+
+  if (contents.length === 0) {
+    contents.push({ role: 'user', parts: [{ text: 'Olá' }] });
+  }
+
+  // 1. Tenta o modelo principal com retry exponencial em caso de 503/429 (pico temporário de demanda)
+  let lastError = '';
+  let lastStatus = 0;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await callGeminiSingleModel(apiKey, model, systemPrompt, contents);
+    if (res.ok) return res.text;
+
+    lastStatus = res.status;
+    lastError = res.errText;
+
+    if (res.status === 503 || res.status === 429) {
+      if (attempt < 3) {
+        await sleepMs(1500 * attempt);
+        continue;
+      }
+    } else {
+      // Erro 400/401/403/404: não adianta repetir o mesmo modelo
+      break;
+    }
+  }
+
+  // 2. Fallback automático em caso de 503/429/404: busca outros modelos flash/lite disponíveis na conta
+  if (lastStatus === 503 || lastStatus === 429 || lastStatus === 404) {
+    const available = await listAvailableGeminiModels();
+    const fallbacks = available
+      .filter(
+        (m) =>
+          m !== model &&
+          (m.includes('flash') || m.includes('lite')) &&
+          !m.includes('tts') &&
+          !m.includes('image') &&
+          !m.includes('audio')
+      )
+      .slice(0, 3);
+
+    for (const fallbackModel of fallbacks) {
+      const res = await callGeminiSingleModel(
+        apiKey,
+        fallbackModel,
+        systemPrompt,
+        contents
+      );
+      if (res.ok) {
+        await logActivity(
+          'AI',
+          `Modelo principal "${model}" indisponível (${lastStatus}); resposta gerada via fallback "${fallbackModel}".`,
+          'WARN'
+        );
+        return res.text;
+      }
+    }
+  }
+
+  throw new Error(`Erro Gemini API (${lastStatus}): ${lastError.slice(0, 300)}`);
 }
 
 async function callOllama(

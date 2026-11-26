@@ -14,6 +14,7 @@ import { AiHealth, AppSettings } from '../types';
 export function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [aiHealth, setAiHealth] = useState<AiHealth | null>(null);
+  const [geminiModels, setGeminiModels] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [savedBanner, setSavedBanner] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -37,6 +38,10 @@ export function SettingsPage() {
 
   useEffect(() => {
     void loadSettings();
+    api
+      .get<{ models: string[] }>('/settings/gemini-models')
+      .then((r) => setGeminiModels(r.models || []))
+      .catch(() => {});
   }, []);
 
   const handleSave = async (e: FormEvent) => {
@@ -179,6 +184,7 @@ export function SettingsPage() {
                   Modelo Gemini
                 </label>
                 <input
+                  list="gemini-models-list"
                   value={settings.geminiModel}
                   onChange={(e) =>
                     setSettings({ ...settings, geminiModel: e.target.value })
@@ -186,6 +192,34 @@ export function SettingsPage() {
                   placeholder="gemini-3.8-flash"
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white"
                 />
+                <datalist id="gemini-models-list">
+                  {geminiModels.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+                {geminiModels.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {geminiModels
+                      .filter((m) => m.includes('flash') || m.includes('lite'))
+                      .slice(0, 4)
+                      .map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() =>
+                            setSettings({ ...settings, geminiModel: m })
+                          }
+                          className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition ${
+                            settings.geminiModel === m
+                              ? 'bg-emerald-500/20 text-emerald-300'
+                              : 'bg-slate-800 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {m}
+                        </button>
+                      ))}
+                  </div>
+                )}
               </div>
             </div>
           ) : (
