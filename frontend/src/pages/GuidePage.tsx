@@ -1,12 +1,13 @@
 import {
   ArrowRight,
   BookOpen,
-  Bot,
   Check,
   ChevronDown,
   ChevronUp,
   Copy,
   Cpu,
+  Eye,
+  GraduationCap,
   HelpCircle,
   Info,
   Layers,
@@ -17,6 +18,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Upload,
   UserCheck,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -98,40 +100,31 @@ const EXAMPLE_TEMPLATES: ExampleTemplate[] = [
     copyText: `Objetivo: Identificar a dúvida ou problema técnico do cliente, orientar o passo a passo de resolução com clareza e confirmar se foi resolvido.\nTom de Voz: Empático, paciente, calmo e objetivo.\nBase de Conhecimento: Redefinição de senha: clicar em "Esqueci minha senha" na tela de login. Segunda via de boleto: enviada pelo portal do cliente. Prazo de troca/garantia: até 30 dias após o recebimento.\nCondição de Parada: Se o cliente relatar cobrança indevida, solicitar estorno/cancelamento ou demonstrar irritação após 2 tentativas de solução.`,
   },
   {
-    id: 'agendamento',
-    badge: 'Global ou Individual',
-    title: 'Agendamento de Consultas / Serviços',
+    id: 'visao',
+    badge: 'Módulo Leitura de Imagens',
+    title: 'Prompt para Leitura de Comprovantes e Prints',
     description:
-      'Coleta preferência de dia/horário e serviço desejado antes de confirmar na agenda.',
+      'Configure em Configurações IA → Leitura de Imagens para extrair automaticamente dados de Pix, boletos e erros.',
     fields: [
       {
-        label: 'Objetivo',
+        label: 'Instrução de Leitura de Imagem',
         value:
-          'Acolher o cliente, perguntar qual serviço deseja agendar e coletar 2 opções de dia e período (manhã ou tarde).',
+          'Analise a imagem enviada no WhatsApp. Se for comprovante Pix/pagamento, extraia valor, data, hora, pagador e recebedor. Se for print de erro, transcreva a mensagem de erro principal. Se for produto, descreva modelo e detalhes visíveis de forma objetiva.',
       },
       {
-        label: 'Tom de Voz',
-        value: 'Atencioso, acolhedor e organizado.',
-      },
-      {
-        label: 'Base de Conhecimento',
+        label: 'Modelo Recomendado (Baixo Custo / Free Tier)',
         value:
-          'Atendemos de segunda a sábado, das 8h às 19h. Endereço: Av. Paulista, 1000 — Sala 42. Aceitamos Pix, débito e crédito em até 3x.',
-      },
-      {
-        label: 'Condição de Parada',
-        value:
-          'Assim que o cliente informar nome completo, serviço e horário preferido, transferir para a recepção confirmar a reserva.',
+          'Gemini Flash ou Flash-Lite (nativamente multimodais no Free Tier) ou deixe vazio para usar o modelo principal da sua conta.',
       },
     ],
-    copyText: `Objetivo: Acolher o cliente, perguntar qual serviço deseja agendar e coletar 2 opções de dia e período (manhã ou tarde).\nTom de Voz: Atencioso, acolhedor e organizado.\nBase de Conhecimento: Atendemos de segunda a sábado, das 8h às 19h. Endereço: Av. Paulista, 1000 — Sala 42. Aceitamos Pix, débito e crédito em até 3x.\nCondição de Parada: Assim que o cliente informar nome completo, serviço e horário preferido, transferir para a recepção confirmar a reserva.`,
+    copyText: `Analise a imagem enviada no WhatsApp. Se for comprovante Pix/pagamento, extraia valor, data, hora, pagador e recebedor. Se for print de erro, transcreva a mensagem de erro principal. Se for produto, descreva modelo e detalhes visíveis de forma objetiva.`,
   },
   {
     id: 'campanha',
-    badge: 'Disparador de Campanhas',
-    title: 'Mensagem de Campanha + Lista CSV',
+    badge: 'Disparador & Importação',
+    title: 'Mensagem de Campanha + Lista CSV / Conversa',
     description:
-      'Exemplo de texto com variável {{primeiro_nome}} e lista pronta para colar na aba Campanhas.',
+      'Exemplo de texto com {{primeiro_nome}} e lista pronta para colar na aba Campanhas ou testar a importação de chat.',
     fields: [
       {
         label: 'Template da Mensagem',
@@ -144,9 +137,9 @@ const EXAMPLE_TEMPLATES: ExampleTemplate[] = [
           'João Silva, 11999998888\nMaria Oliveira, 21988887777\nCarlos Souza, 5531977776666',
       },
       {
-        label: 'Configuração Recomendada',
+        label: 'Formato de Importação de Conversa (.txt ou colado)',
         value:
-          'Ative "Variar saudação/texto com IA" + "Ativar IA automaticamente quando responder" + intervalo 45s–120s e pausa de 5 min a cada 20 envios.',
+          '25/11/2026 14:30 - João: Olá, quanto custa o plano Pro?\n25/11/2026 14:31 - Você: Oi João! O plano Pro sai por R$ 197/mês.',
       },
     ],
     copyText: `Olá {{primeiro_nome}}, tudo bem? Estamos liberando condições especiais esta semana para quem já demonstrou interesse. Posso te enviar os detalhes por aqui?`,
@@ -156,27 +149,31 @@ const EXAMPLE_TEMPLATES: ExampleTemplate[] = [
 const FAQ_ITEMS = [
   {
     q: 'Como consigo a chave gratuita da Google Gemini API?',
-    a: 'Acesse https://aistudio.google.com/apikey com sua conta Google, clique em "Create API Key", copie a chave gerada e cole em Configurações IA → Gemini API Key. Depois clique em Salvar e em "Testar Conexão com IA". O plano gratuito do Gemini atende perfeitamente centenas de conversas.',
+    a: 'Acesse https://aistudio.google.com/apikey com sua conta Google, clique em "Create API Key", copie a chave gerada e cole em Configurações IA → Gemini API Key. Depois clique em Salvar e em "Testar Conexão com IA". O sistema conta com retry automático e fallback entre modelos Flash/Lite caso haja pico temporário (503).',
   },
   {
-    q: 'Posso usar Ollama 100% gratuito na minha máquina?',
-    a: 'Sim! Quando rodar o ZapFlow AI localmente, instale o Ollama (ollama.com), baixe um modelo como "ollama pull llama3.2" ou "ollama pull qwen2.5", vá em Configurações IA, escolha Ollama (Local) e mantenha a URL http://localhost:11434.',
+    q: 'Como funciona o Módulo de Leitura de Imagens (Visão IA)? Tem custo extra?',
+    a: 'Os modelos Gemini Flash e Flash-Lite são nativamente multimodais e leem imagens no mesmo Free Tier da sua chave (sem API extra). Basta ativar a opção em Configurações IA → Módulo de Leitura de Imagens. Quando um cliente enviar foto (comprovante Pix, print de erro, produto), a IA extrai o conteúdo, exibe na bolha do chat e já usa essa leitura para responder.',
+  },
+  {
+    q: 'Como funciona o treinamento da IA na tela "Treinamento IA"?',
+    a: 'Você pode treinar a IA de 3 formas: (1) conversando no Simulador ao Vivo e clicando em "Aprovar resposta" ou "Corrigir resposta", (2) analisando conversas reais do seu WhatsApp ou arquivos .txt importados para extrair automaticamente exemplos e lacunas da Base de Conhecimento, e (3) cadastrando exemplos manuais. Todos os exemplos ativos são injetados automaticamente (Few-Shot Learning) antes de cada resposta real.',
+  },
+  {
+    q: 'Consigo importar conversas antigas que aconteceram antes de eu usar o sistema?',
+    a: 'Sim! Em Conversas → botão "Importar", você sobe o arquivo .txt exportado do WhatsApp (Menu ⋮ → Mais → Exportar conversa → Sem mídia) ou cola o texto. O sistema identifica os participantes automaticamente, pergunta qual nome é você e grava todo o histórico com datas originais para a IA continuar o atendimento com contexto completo.',
+  },
+  {
+    q: 'O que a barra "Uso da IA (Hoje)" acima da minha conta mede?',
+    a: 'Ela acompanha em tempo real (via WebSocket) o número exato de requisições e tokens reais consumidos pela sua conta hoje e no mês — incluindo chats, resumos, leituras de imagem e treinamentos. Você pode ajustar o limite diário de referência em Configurações IA.',
   },
   {
     q: 'Outras pessoas com o link conseguem ver meu WhatsApp ou minha chave de IA?',
-    a: 'Não. A aplicação é 100% multi-usuário com isolamento completo: cada conta (Google ou e-mail/senha) possui sua própria sessão criptografada, sua própria conexão Baileys do WhatsApp, sua própria chave de IA, conversas, contatos, regras e campanhas.',
+    a: 'Não. A aplicação é 100% multi-usuário com isolamento completo: cada conta (Google OAuth ou e-mail/senha) possui sua própria sessão criptografada HttpOnly, sala privada no WebSocket, conexão Baileys independente, chave de IA, conversas, contatos, regras, treinamentos e campanhas.',
   },
   {
     q: 'Como evitar bloqueio/banimento do número no WhatsApp?',
-    a: 'Nunca envie dezenas de mensagens idênticas em segundos. Use sempre os padrões anti-ban do ZapFlow AI: intervalo aleatório entre 45 e 120 segundos, pausa em lote de 5 minutos a cada 20 disparos, simulação de "digitando..." (3–7s) e variação natural com IA. Em números novos, faça aquecimento começando com 20–30 disparos/dia; em números antigos, mantenha abaixo de 80–100/dia.',
-  },
-  {
-    q: 'O que acontece quando eu respondo manualmente uma conversa pelo painel?',
-    a: 'Se a opção "Assumir conversa automaticamente ao enviar mensagem manual" estiver ativa (padrão), o chat muda na hora de Modo Automático (IA) para Modo Manual (Humano) para que a IA não atrapalhe seu atendimento. Quando quiser devolver para a IA, basta clicar em "Modo Manual (Ativar IA)" no topo do chat.',
-  },
-  {
-    q: 'Se o servidor reiniciar, preciso escanear o QR Code de novo?',
-    a: 'Não! As credenciais da sua sessão do WhatsApp e o banco SQLite ficam gravados no volume persistente. Ao reiniciar, o servidor restaura sua conexão automaticamente.',
+    a: 'Use sempre os padrões anti-ban do ZapFlow AI: intervalo aleatório entre 45 e 120 segundos, pausa em lote de 5 minutos a cada 20 disparos, simulação de "digitando..." (3–7s) e variação natural com IA. Em números novos, faça aquecimento começando com 20–30 disparos/dia; em números antigos, mantenha abaixo de 80–100/dia.',
   },
 ];
 
@@ -209,7 +206,7 @@ export function GuidePage({ onNavigate }: Props) {
               Manual Completo de Uso
             </h2>
             <p className="text-sm leading-relaxed text-slate-300">
-              Aprenda em poucos minutos a conectar seu WhatsApp sem custo de API oficial, configurar personas inteligentes com hierarquia de regras e executar campanhas seguras com proteção anti-ban.
+              Aprenda em poucos minutos a conectar seu WhatsApp sem API oficial paga, ativar leitura de imagens, importar conversas antigas, treinar sua IA no simulador e disparar campanhas seguras.
             </p>
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">
@@ -221,11 +218,11 @@ export function GuidePage({ onNavigate }: Props) {
               Configurar IA
             </button>
             <button
-              onClick={() => onNavigate('dashboard')}
+              onClick={() => onNavigate('training')}
               className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/80 px-4 py-2.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-700"
             >
-              <QrCode className="h-4 w-4" />
-              Conectar WhatsApp
+              <GraduationCap className="h-4 w-4 text-emerald-400" />
+              Treinar IA
             </button>
           </div>
         </div>
@@ -262,12 +259,12 @@ export function GuidePage({ onNavigate }: Props) {
       {/* SEÇÃO 1: INÍCIO RÁPIDO */}
       {section === 'quickstart' && (
         <div className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {[
               {
                 step: 'Passo 1',
-                title: 'Configure seu Motor de IA Gratuito',
-                desc: 'Acesse Configurações IA e cole sua chave gratuita do Google Gemini (aistudio.google.com/apikey) ou selecione Ollama Local. Clique em "Testar Conexão com IA" para confirmar que a IA está respondendo.',
+                title: 'Configure seu Motor de IA + Visão',
+                desc: 'Em Configurações IA, cole sua chave gratuita do Google Gemini (ou Ollama Local), teste a conexão e, se desejar, ative o Módulo de Leitura de Imagens para a IA ler comprovantes e fotos.',
                 actionLabel: 'Ir para Configurações IA',
                 target: 'settings' as NavTab,
                 icon: Cpu,
@@ -275,23 +272,39 @@ export function GuidePage({ onNavigate }: Props) {
               {
                 step: 'Passo 2',
                 title: 'Conecte seu WhatsApp via QR Code',
-                desc: 'No Painel de Controle, clique em "Conectar via QR Code". No celular, abra WhatsApp → Aparelhos Conectados → Conectar Aparelho e aponte a câmera. Sua sessão fica salva automaticamente.',
+                desc: 'No Painel de Controle, clique em "Conectar via QR Code" e escaneie pelo WhatsApp → Aparelhos Conectados. Sua sessão isolada fica salva automaticamente no servidor.',
                 actionLabel: 'Ir para Painel de Controle',
                 target: 'dashboard' as NavTab,
                 icon: QrCode,
               },
               {
                 step: 'Passo 3',
-                title: 'Personalize o Comportamento da IA',
-                desc: 'Em Fluxos & Personas IA, edite a regra Global (padrão) com informações do seu negócio, tom de voz e quando transferir para humano. Crie regras específicas por Grupo/Tag ou por número Individual.',
-                actionLabel: 'Ir para Fluxos & Personas IA',
+                title: 'Configure Personas e Regras',
+                desc: 'Em Fluxos & Personas IA, ajuste a regra Global com seu objetivo, tom de voz, base de conhecimento e condição de parada. Crie regras por Grupo/Tag ou Individual.',
+                actionLabel: 'Ir para Fluxos & Personas',
                 target: 'rules' as NavTab,
                 icon: Layers,
               },
               {
                 step: 'Passo 4',
-                title: 'Acompanhe Chats ou Dispare Campanhas',
-                desc: 'Use a aba Conversas para acompanhar respostas da IA em tempo real ou assumir qualquer chat manualmente. Em Campanhas, importe contatos por texto/CSV com proteção anti-ban já ativada.',
+                title: 'Treine a IA no Simulador',
+                desc: 'Use a tela Treinamento IA para testar perguntas no simulador ao vivo, aprovar ou corrigir respostas e analisar conversas reais ou .txt antigos para melhorar a base automaticamente.',
+                actionLabel: 'Ir para Treinamento IA',
+                target: 'training' as NavTab,
+                icon: GraduationCap,
+              },
+              {
+                step: 'Passo 5',
+                title: 'Importe ou Gerencie Conversas',
+                desc: 'Na aba Conversas, importe históricos antigos (.txt do WhatsApp), alterne cada chat entre Automático (IA) e Manual (Humano) e gere resumos executivos com 1 clique.',
+                actionLabel: 'Ir para Conversas',
+                target: 'conversations' as NavTab,
+                icon: MessageSquare,
+              },
+              {
+                step: 'Passo 6',
+                title: 'Dispare Campanhas Anti-Ban',
+                desc: 'Em Campanhas, importe contatos (colar texto, CSV ou manual), personalize com {{primeiro_nome}} + variação por IA e acompanhe a fila sequencial com intervalos aleatórios.',
                 actionLabel: 'Ir para Campanhas',
                 target: 'campaigns' as NavTab,
                 icon: Megaphone,
@@ -375,7 +388,7 @@ export function GuidePage({ onNavigate }: Props) {
               Como Funciona a Hierarquia de Regras da IA
             </h3>
             <p className="mt-1 text-xs text-slate-400">
-              Quando uma mensagem chega no seu WhatsApp, a IA verifica qual persona aplicar seguindo esta ordem exata de prioridade:
+              Quando uma mensagem chega no seu WhatsApp, a IA escolhe qual persona aplicar seguindo esta ordem exata (somando também os exemplos ativos de Treinamento IA):
             </p>
             <div className="mt-4 grid gap-3 sm:grid-cols-4">
               {[
@@ -423,20 +436,59 @@ export function GuidePage({ onNavigate }: Props) {
             <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
               <h4 className="flex items-center gap-2 text-sm font-bold text-white">
                 <MessageSquare className="h-4 w-4 text-emerald-400" />
-                Conversas: Modo Automático vs. Manual
+                Conversas &amp; Importação de Histórico
               </h4>
               <ul className="mt-3 space-y-2 text-xs text-slate-300">
                 <li>
                   • <strong>Switch por chat:</strong> alterne qualquer conversa entre <em>IA Automática</em> e <em>Manual (Humano)</em> com 1 clique.
                 </li>
                 <li>
-                  • <strong>Assumir automaticamente:</strong> ao enviar uma mensagem manual pelo painel, a IA pausa naquele chat sozinha (configurável).
+                  • <strong>Importar conversa antiga:</strong> clique em <em>Importar</em> para subir um <code>.txt</code> do WhatsApp (Android/iOS) ou colar texto e detectar automaticamente quem é você.
                 </li>
                 <li>
                   • <strong>Transferência inteligente:</strong> quando a <em>Condição de Parada</em> da regra é atingida, a IA avisa o cliente e muda o chat para Manual automaticamente.
                 </li>
                 <li>
-                  • <strong>Resumo IA:</strong> clique em <em>Resumo IA</em> em qualquer chat (ou no Dashboard para o dia inteiro) para gerar um resumo executivo.
+                  • <strong>Resumo IA &amp; Visão:</strong> gere resumos executivos com 1 clique e visualize cards de <em>Leitura da Imagem (IA)</em> nas fotos enviadas.
+                </li>
+              </ul>
+            </div>
+
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+              <h4 className="flex items-center gap-2 text-sm font-bold text-white">
+                <GraduationCap className="h-4 w-4 text-emerald-400" />
+                Treinamento de IA (Simulador &amp; Histórico)
+              </h4>
+              <ul className="mt-3 space-y-2 text-xs text-slate-300">
+                <li>
+                  • <strong>Simulador ao Vivo:</strong> teste perguntas difíceis sem tocar no WhatsApp real e clique em <em>Aprovar</em> ou <em>Corrigir resposta</em>.
+                </li>
+                <li>
+                  • <strong>Aprender de Conversas Reais:</strong> analise chats reais ou arquivos <code>.txt</code> antigos para extrair pares pergunta/resposta ideais.
+                </li>
+                <li>
+                  • <strong>Incorporar na Base:</strong> adicione conhecimento descoberto direto na Base de Conhecimento da regra com 1 clique.
+                </li>
+                <li>
+                  • <strong>Few-Shot Automático:</strong> exemplos ativos são injetados no prompt em todo atendimento real.
+                </li>
+              </ul>
+            </div>
+
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+              <h4 className="flex items-center gap-2 text-sm font-bold text-white">
+                <Eye className="h-4 w-4 text-emerald-400" />
+                Módulo de Leitura de Imagens &amp; Barra de Uso IA
+              </h4>
+              <ul className="mt-3 space-y-2 text-xs text-slate-300">
+                <li>
+                  • <strong>Ativação opcional:</strong> ative ou desative a leitura de fotos em <em>Configurações IA</em> a qualquer momento.
+                </li>
+                <li>
+                  • <strong>Testador integrado:</strong> envie uma imagem de teste (ex.: comprovante ou print) para validar a leitura antes de ativar em produção.
+                </li>
+                <li>
+                  • <strong>Monitoramento ao vivo:</strong> a barra <em>Uso da IA (Hoje)</em> acima da sua conta mostra requisições, tokens reais e imagens lidas em tempo real.
                 </li>
               </ul>
             </div>
@@ -444,20 +496,20 @@ export function GuidePage({ onNavigate }: Props) {
             <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
               <h4 className="flex items-center gap-2 text-sm font-bold text-white">
                 <Megaphone className="h-4 w-4 text-emerald-400" />
-                Campanhas &amp; Fila Sequencial
+                Campanhas &amp; Fila Sequencial Anti-Ban
               </h4>
               <ul className="mt-3 space-y-2 text-xs text-slate-300">
                 <li>
                   • <strong>3 formas de importar:</strong> colar lista (<code>Nome, Número</code>), subir arquivo <code>.csv</code> ou adicionar manualmente.
                 </li>
                 <li>
-                  • <strong>Variáveis dinâmicas:</strong> use <code>{'{{nome}}'}</code> (nome completo) ou <code>{'{{primeiro_nome}}'}</code> na mensagem inicial.
+                  • <strong>Variáveis &amp; Variação IA:</strong> use <code>{'{{nome}}'}</code> ou <code>{'{{primeiro_nome}}'}</code> e ative a variação natural por IA.
                 </li>
                 <li>
-                  • <strong>Pós-resposta inteligente:</strong> defina se a IA assume a conversa automaticamente assim que o cliente responder, usando um fluxo específico.
+                  • <strong>Pós-resposta inteligente:</strong> defina qual fluxo de IA assume a conversa automaticamente quando o contato responder.
                 </li>
                 <li>
-                  • <strong>Controle total:</strong> pause, retome ou cancele em tempo real com contagem regressiva ao vivo do intervalo anti-ban.
+                  • <strong>Controle total:</strong> pause, retome ou cancele em tempo real com contagem regressiva ao vivo.
                 </li>
               </ul>
             </div>
@@ -519,13 +571,21 @@ export function GuidePage({ onNavigate }: Props) {
               <div className="mt-4 flex justify-end">
                 <button
                   onClick={() =>
-                    onNavigate(tpl.id === 'campanha' ? 'campaigns' : 'rules')
+                    onNavigate(
+                      tpl.id === 'campanha'
+                        ? 'campaigns'
+                        : tpl.id === 'visao'
+                          ? 'settings'
+                          : 'rules'
+                    )
                   }
                   className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-400 hover:text-emerald-300"
                 >
                   {tpl.id === 'campanha'
                     ? 'Testar em Campanhas'
-                    : 'Criar em Fluxos & Personas IA'}
+                    : tpl.id === 'visao'
+                      ? 'Configurar Leitura de Imagens'
+                      : 'Criar em Fluxos & Personas IA'}
                   <ArrowRight className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -571,9 +631,11 @@ export function GuidePage({ onNavigate }: Props) {
         <div className="grid gap-6 lg:grid-cols-12">
           <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-6 lg:col-span-7">
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30">
-                <Bot className="h-6 w-6" />
-              </div>
+              <img
+                src="/favicon.svg"
+                alt="ZapFlow AI"
+                className="h-11 w-11 rounded-2xl shadow-md"
+              />
               <div>
                 <h3 className="text-lg font-bold text-white">Sobre o ZapFlow AI</h3>
                 <p className="text-xs text-slate-400">
@@ -583,7 +645,7 @@ export function GuidePage({ onNavigate }: Props) {
             </div>
 
             <p className="text-sm leading-relaxed text-slate-300">
-              O <strong>ZapFlow AI</strong> foi projetado para permitir que pequenas empresas, profissionais autônomos e equipes automatizem atendimentos e campanhas no WhatsApp sem depender de APIs oficiais pagas por mensagem nem de assinaturas caras de SaaS.
+              O <strong>ZapFlow AI</strong> foi projetado para permitir que pequenas empresas, profissionais autônomos e equipes automatizem atendimentos, leitura de imagens, treinamento contínuo de IA e campanhas no WhatsApp sem depender de APIs oficiais pagas por mensagem.
             </p>
 
             <div className="grid gap-3 sm:grid-cols-2">
@@ -593,7 +655,7 @@ export function GuidePage({ onNavigate }: Props) {
                   Privacidade Multi-Usuário
                 </p>
                 <p className="mt-1.5 text-xs text-slate-400">
-                  Autenticação com Google OAuth e e-mail/senha. Cada conta tem seu próprio WhatsApp, banco lógico, regras, logs e chave de IA — zero compartilhamento entre usuários.
+                  Autenticação com Google OAuth e e-mail/senha. Cada conta tem seu próprio WhatsApp, banco lógico, regras, treinamentos, logs e chave de IA — zero compartilhamento entre usuários.
                 </p>
               </div>
               <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
@@ -602,7 +664,16 @@ export function GuidePage({ onNavigate }: Props) {
                   Resiliência &amp; Anti-Ban
                 </p>
                 <p className="mt-1.5 text-xs text-slate-400">
-                  Retry automático + fallback em picos do Gemini, reconexão automática do Baileys e fila sequencial em SQLite com jitter e pausa por lotes.
+                  Retry automático + fallback em picos do Gemini, reconexão automática do Baileys, fila sequencial em SQLite com jitter e medição real de tokens por usuário.
+                </p>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 sm:col-span-2">
+                <p className="flex items-center gap-2 text-xs font-bold text-emerald-300">
+                  <Upload className="h-4 w-4" />
+                  Importação &amp; Evolução Contínua
+                </p>
+                <p className="mt-1.5 text-xs text-slate-400">
+                  Importe conversas antigas exportadas do WhatsApp (<code>.txt</code>) para dar contexto imediato à IA e use o módulo de Treinamento para transformar conversas reais em melhorias diretas no atendimento.
                 </p>
               </div>
             </div>
@@ -614,10 +685,11 @@ export function GuidePage({ onNavigate }: Props) {
               {[
                 ['Frontend', 'React 19 + Vite + TypeScript + Tailwind CSS'],
                 ['Backend', 'Node.js + TypeScript + Express + Socket.io'],
-                ['WhatsApp', '@whiskeysockets/baileys (sessão local leve)'],
-                ['Banco de Dados', 'SQLite + Prisma ORM (persistência em Volume)'],
-                ['Inteligência Artificial', 'Google Gemini Free Tier & Ollama Local'],
+                ['WhatsApp', '@whiskeysockets/baileys (sessão isolada/usuário)'],
+                ['Banco de Dados', 'SQLite + Prisma ORM (Volume persistente)'],
+                ['IA & Visão', 'Google Gemini Free Tier (Flash/Lite) & Ollama'],
                 ['Autenticação', 'Google Identity Services + Cookie HttpOnly'],
+                ['Deploy', 'Docker multi-stage em serviço único (Railway)'],
               ].map(([k, v]) => (
                 <div
                   key={k}
