@@ -5,6 +5,7 @@ import {
   FileText,
   Megaphone,
   MessageSquarePlus,
+  Mic,
   Search,
   Send,
   Sparkles,
@@ -774,6 +775,17 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
                           </p>
                           <p className="whitespace-pre-wrap leading-relaxed text-slate-300">
                             {msg.imageAnalysis}
+                          </p>
+                        </div>
+                      )}
+                      {msg.audioTranscript && (
+                        <div className="mt-2 rounded-xl border border-sky-500/25 bg-slate-950/70 p-2.5 text-xs text-slate-200">
+                          <p className="mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-sky-300">
+                            <Mic className="h-3 w-3" />
+                            Transcrição do Áudio (IA)
+                          </p>
+                          <p className="whitespace-pre-wrap leading-relaxed text-slate-300">
+                            {msg.audioTranscript}
                           </p>
                         </div>
                       )}

@@ -9,13 +9,14 @@ import {
   getUserSettings,
   listAvailableGeminiModels,
   testAiConnection,
+  transcribeAudioWithAi,
 } from '../services/aiService';
 import { whatsappManager } from '../services/whatsappService';
 
 export const settingsRouter = Router();
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 6 * 1024 * 1024 },
+  limits: { fileSize: 10 * 1024 * 1024 },
 });
 
 settingsRouter.get('/', async (req, res) => {
@@ -48,6 +49,9 @@ settingsRouter.put('/', async (req, res) => {
       enableImageReading,
       geminiVisionModel,
       imageAnalysisPrompt,
+      enableAudioTranscription,
+      geminiAudioModel,
+      audioTranscriptionPrompt,
       dailyAiRequestLimit,
       defaultMinDelaySec,
       defaultMaxDelaySec,
@@ -89,6 +93,17 @@ settingsRouter.put('/', async (req, res) => {
           : {}),
         ...(imageAnalysisPrompt !== undefined
           ? { imageAnalysisPrompt: String(imageAnalysisPrompt).trim() }
+          : {}),
+        ...(enableAudioTranscription !== undefined
+          ? { enableAudioTranscription: Boolean(enableAudioTranscription) }
+          : {}),
+        ...(geminiAudioModel !== undefined
+          ? { geminiAudioModel: String(geminiAudioModel).trim() }
+          : {}),
+        ...(audioTranscriptionPrompt !== undefined
+          ? {
+              audioTranscriptionPrompt: String(audioTranscriptionPrompt).trim(),
+            }
           : {}),
         ...(dailyAiRequestLimit !== undefined
           ? {
@@ -172,6 +187,30 @@ settingsRouter.post('/test-vision', upload.single('image'), async (req, res) => 
       ok: false,
       error:
         err instanceof Error ? err.message : 'Erro ao analisar imagem de teste.',
+    });
+  }
+});
+
+settingsRouter.post('/test-audio', upload.single('audio'), async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: 'Envie um arquivo de áudio para testar.' });
+      return;
+    }
+    const result = await transcribeAudioWithAi(
+      userId,
+      req.file.buffer.toString('base64'),
+      req.file.mimetype || 'audio/ogg'
+    );
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Erro ao transcrever áudio de teste.',
     });
   }
 });

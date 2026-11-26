@@ -45,6 +45,7 @@ export interface AiUsageSummary {
   outputTokensToday: number;
   totalTokensToday: number;
   visionToday: number;
+  audioToday: number;
   requestsMonth: number;
   totalTokensMonth: number;
   provider: 'gemini' | 'ollama';
@@ -137,6 +138,7 @@ export interface Message {
   body: string;
   mediaType?: string | null;
   imageAnalysis?: string | null;
+  audioTranscript?: string | null;
   status: string;
   createdAt: string;
 }
@@ -210,6 +212,9 @@ export interface AppSettings {
   enableImageReading: boolean;
   geminiVisionModel: string;
   imageAnalysisPrompt: string;
+  enableAudioTranscription: boolean;
+  geminiAudioModel: string;
+  audioTranscriptionPrompt: string;
   dailyAiRequestLimit: number;
   defaultMinDelaySec: number;
   defaultMaxDelaySec: number;

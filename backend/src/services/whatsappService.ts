@@ -20,6 +20,7 @@ import {
   analyzeImageWithAi,
   generateConversationReply,
   generateConversationSummary,
+  transcribeAudioWithAi,
 } from './aiService';
 
 const logger = pino({ level: 'silent' });
@@ -432,16 +433,24 @@ class UserWhatsAppSession {
       }
 
       const imageMsg = msg.message?.imageMessage;
+      const audioMsg = msg.message?.audioMessage;
       const caption = imageMsg?.caption?.trim() || '';
       let body = extractTextFromMessage(msg.message).trim();
       let mediaType: string | null = null;
       let imageAnalysis: string | null = null;
+      let audioTranscript: string | null = null;
 
       if (imageMsg) {
         mediaType = 'image';
         if (!body) {
           body = caption ? `[Imagem] ${caption}` : '[Imagem enviada]';
         }
+      } else if (audioMsg) {
+        mediaType = 'audio';
+        const secs = audioMsg.seconds ? ` (${audioMsg.seconds}s)` : '';
+        body = audioMsg.ptt
+          ? `[Mensagem de voz${secs}]`
+          : `[Áudio enviado${secs}]`;
       }
 
       if (!body) return;
@@ -502,6 +511,58 @@ class UserWhatsAppSession {
         }
       }
 
+      // Se o módulo de transcrição de áudio estiver ativo para este usuário, transcreve com Gemini multimodal
+      if (audioMsg && settings?.enableAudioTranscription) {
+        try {
+          const mediaBuffer = (await downloadMediaMessage(
+            msg,
+            'buffer',
+            {},
+            {
+              logger,
+              reuploadRequest: this.sock!.updateMediaMessage,
+            }
+          )) as Buffer;
+
+          const maxAudioBytes = 10 * 1024 * 1024; // Limite de 10MB (~15-20 min OGG Opus)
+          if (
+            mediaBuffer &&
+            mediaBuffer.length > 0 &&
+            mediaBuffer.length <= maxAudioBytes
+          ) {
+            const mimeType = audioMsg.mimetype || 'audio/ogg';
+            const result = await transcribeAudioWithAi(
+              this.userId,
+              mediaBuffer.toString('base64'),
+              mimeType
+            );
+            audioTranscript = result.transcript;
+            await logActivity(
+              this.userId,
+              'AI',
+              `Áudio recebido de ${pushName || phone} transcrito com sucesso (${result.modelUsed}).`,
+              'SUCCESS'
+            );
+          } else if (mediaBuffer && mediaBuffer.length > maxAudioBytes) {
+            await logActivity(
+              this.userId,
+              'AI',
+              `Áudio de ${pushName || phone} excedeu 10MB e não foi transcrito.`,
+              'WARN'
+            );
+          }
+        } catch (audioErr) {
+          await logActivity(
+            this.userId,
+            'AI',
+            `Falha ao transcrever áudio de ${pushName || phone}: ${
+              audioErr instanceof Error ? audioErr.message : 'erro desconhecido'
+            }`,
+            'ERROR'
+          );
+        }
+      }
+
       const contact = await prisma.contact.upsert({
         where: { userId_jid: { userId: this.userId, jid: remoteJid } },
         update: pushName ? { name: pushName } : {},
@@ -556,6 +617,7 @@ class UserWhatsAppSession {
           body,
           mediaType,
           imageAnalysis,
+          audioTranscript,
           status: 'DELIVERED',
         },
       });
@@ -568,7 +630,7 @@ class UserWhatsAppSession {
       await logActivity(
         this.userId,
         'WHATSAPP',
-        `${imageMsg ? 'Imagem' : 'Mensagem'} recebida de ${contactLabel}.`,
+        `${imageMsg ? 'Imagem' : audioMsg ? 'Áudio' : 'Mensagem'} recebido(a) de ${contactLabel}.`,
         'INFO'
       );
 

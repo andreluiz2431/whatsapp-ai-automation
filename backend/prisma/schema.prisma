@@ -43,6 +43,9 @@ model UserSettings {
   enableImageReading         Boolean   @default(false)
   geminiVisionModel          String    @default("")
   imageAnalysisPrompt        String    @default("Descreva a imagem de forma objetiva em português para ajudar no atendimento de WhatsApp. Extraia textos legíveis, valores, datas, códigos, comprovantes ou detalhes do produto/erro mostrados.")
+  enableAudioTranscription   Boolean   @default(false)
+  geminiAudioModel           String    @default("")
+  audioTranscriptionPrompt   String    @default("Transcreva fielmente o áudio enviado no WhatsApp em português. Se houver informações importantes no tom ou contexto, adicione uma breve observação entre colchetes ao final.")
   dailyAiRequestLimit        Int       @default(250)
   defaultMinDelaySec         Int       @default(45)
   defaultMaxDelaySec         Int       @default(120)
@@ -124,10 +127,11 @@ model Message {
   waMessageId    String?
   direction      String       // INBOUND | OUTBOUND
   senderType     String       // CONTACT | AI | HUMAN | CAMPAIGN
-  body           String
-  mediaType      String?      // image | null
-  imageAnalysis  String?
-  status         String       @default("SENT") // PENDING | SENT | DELIVERED | READ | FAILED
+  body            String
+  mediaType       String?      // image | audio | null
+  imageAnalysis   String?
+  audioTranscript String?
+  status          String       @default("SENT") // PENDING | SENT | DELIVERED | READ | FAILED
   createdAt      DateTime     @default(now())
 
   @@unique([conversationId, waMessageId])

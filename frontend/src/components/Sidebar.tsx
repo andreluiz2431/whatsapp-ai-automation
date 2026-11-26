@@ -349,6 +349,9 @@ export function Sidebar({
               {aiUsage && aiUsage.visionToday > 0
                 ? ` • ${aiUsage.visionToday} img`
                 : ''}
+              {aiUsage && aiUsage.audioToday > 0
+                ? ` • ${aiUsage.audioToday} áud`
+                : ''}
             </span>
             <span>
               Mês: {aiUsage ? aiUsage.requestsMonth : 0} req

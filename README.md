@@ -47,11 +47,10 @@ Aplicação web full-stack **multi-usuário**, **100% gratuita e open-source**, 
 4. **Global (Padrão)** — aplicado quando não há regra mais específica.
 - Cada regra define: *Objetivo da conversa*, *Tom de voz*, *Base de conhecimento* e *Condição de parada* (ao ser atingida, a IA retorna o marcador interno `[TRANSFERIR_HUMANO]`, que é removido da mensagem, transfere o chat para modo **Manual** e registra alerta no log).
 
-### 5. Módulo de Leitura de Imagens (Visão IA — Ativável por Usuário)
-- Ativação opcional em **Configurações IA → Módulo de Leitura de Imagens (Visão IA)**.
-- Utiliza modelos nativamente multimodais de baixo custo/Free Tier do **Gemini (Flash / Flash-Lite)** ou **Ollama multimodal** (`llama3.2-vision`, `gemma3`, `llava`).
-- Prompt de leitura personalizável (ex.: extração de dados de comprovantes Pix, códigos, prints de erro ou produtos) + **testador por upload** direto na tela de configurações.
-- Ao receber imagem no WhatsApp (até 6MB), o backend baixa a mídia via Baileys, analisa com IA, exibe o card **"Leitura da Imagem (IA)"** na bolha do chat e injeta a descrição no contexto da resposta automática.
+### 5. Módulos Multimodais: Leitura de Imagens e Transcrição de Áudios (Ativáveis por Usuário)
+- **Leitura de Imagens (Visão IA):** ativação opcional em **Configurações IA**. Usa modelos multimodais **Gemini (Flash / Flash-Lite)** no Free Tier ou **Ollama multimodal** (`llama3.2-vision`, `gemma3`, `llava`), com prompt customizável e testador por upload. Ao receber foto (até 6MB), exibe o card **"Leitura da Imagem (IA)"** na bolha do chat e passa o conteúdo para a IA responder.
+- **Transcrição e Interpretação de Áudios (Áudio IA):** ativação opcional em **Configurações IA**. Baixa mensagens de voz/áudios do WhatsApp (`audio/ogg` Opus, MP3, M4A, WAV até 10MB) via Baileys e transcreve nativamente com **Gemini Flash / Flash-Lite** no Free Tier (sem Whisper externo nem FFmpeg), exibindo o card **"Transcrição do Áudio (IA)"** no chat e alimentando automaticamente respostas da IA, resumos e treinamentos.
+- **Seleção em Massa nas Conversas:** botão **Selecionar Conversas** (`PATCH /api/conversations/bulk-mode`) para aplicar **Ativar IA** ou **Modo Manual** em múltiplas conversas de uma vez.
 
 ### 6. Tela Dedicada de Treinamento da IA (`Treinamento IA`)
 - **Simulador & Treino ao Vivo:** converse diretamente com a persona escolhida sem enviar nada para o WhatsApp real; aprove respostas corretas ou corrija respostas da IA com 1 clique.

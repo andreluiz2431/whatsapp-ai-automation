@@ -6,6 +6,7 @@ import { emitUserEvent, logActivity } from './activityLog';
 export type AiUsageFeature =
   | 'chat'
   | 'vision'
+  | 'audio'
   | 'summary'
   | 'variation'
   | 'training'
@@ -18,6 +19,7 @@ export interface AiUsageSummary {
   outputTokensToday: number;
   totalTokensToday: number;
   visionToday: number;
+  audioToday: number;
   requestsMonth: number;
   totalTokensMonth: number;
   provider: 'gemini' | 'ollama';
@@ -248,7 +250,7 @@ export async function getAiUsageSummary(
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
 
-  const [settings, todayAgg, visionToday, monthAgg] = await Promise.all([
+  const [settings, todayAgg, visionToday, audioToday, monthAgg] = await Promise.all([
     getUserSettings(userId),
     prisma.aiUsageLog.aggregate({
       where: { userId, createdAt: { gte: startOfDay } },
@@ -257,6 +259,9 @@ export async function getAiUsageSummary(
     }),
     prisma.aiUsageLog.count({
       where: { userId, feature: 'vision', createdAt: { gte: startOfDay } },
+    }),
+    prisma.aiUsageLog.count({
+      where: { userId, feature: 'audio', createdAt: { gte: startOfDay } },
     }),
     prisma.aiUsageLog.aggregate({
       where: { userId, createdAt: { gte: startOfMonth } },
@@ -278,6 +283,7 @@ export async function getAiUsageSummary(
     outputTokensToday: todayAgg._sum.outputTokens || 0,
     totalTokensToday: todayAgg._sum.totalTokens || 0,
     visionToday,
+    audioToday,
     requestsMonth: monthAgg._count.id || 0,
     totalTokensMonth: monthAgg._sum.totalTokens || 0,
     provider,
@@ -605,9 +611,15 @@ export async function generateConversationReply(
   for (const msg of ordered) {
     const role: 'user' | 'assistant' =
       msg.direction === 'INBOUND' ? 'user' : 'assistant';
-    const contentText = msg.imageAnalysis
-      ? `${msg.body}\n[Conteúdo lido da imagem enviada]: ${msg.imageAnalysis}`
-      : msg.body;
+    const extras: string[] = [];
+    if (msg.imageAnalysis) {
+      extras.push(`[Conteúdo lido da imagem enviada]: ${msg.imageAnalysis}`);
+    }
+    if (msg.audioTranscript) {
+      extras.push(`[Transcrição do áudio enviado]: ${msg.audioTranscript}`);
+    }
+    const contentText =
+      extras.length > 0 ? `${msg.body}\n${extras.join('\n')}` : msg.body;
     const prev = turns[turns.length - 1];
     if (prev && prev.role === role) {
       prev.content = `${prev.content}\n${contentText}`;
@@ -1105,6 +1117,164 @@ export async function analyzeImageWithAi(
 }
 
 /**
+ * Transcrição e interpretação nativa de áudios/mensagens de voz do WhatsApp (OGG Opus, MP3, M4A, WAV)
+ * usando modelos Gemini Flash/Flash-Lite diretamente no Free Tier (sem Whisper externo nem FFmpeg).
+ */
+export async function transcribeAudioWithAi(
+  userId: string,
+  base64Data: string,
+  rawMimeType: string
+): Promise<{ transcript: string; modelUsed: string }> {
+  const settings = await getUserSettings(userId);
+  const apiKey = settings.geminiApiKey;
+
+  if (!apiKey) {
+    throw new Error(
+      'Transcrição nativa de áudio requer GEMINI_API_KEY configurada na sua conta (mesmo se usar Ollama para texto, você pode salvar sua chave gratuita do Gemini).'
+    );
+  }
+
+  // Normaliza mimeType do WhatsApp (ex: "audio/ogg; codecs=opus" -> "audio/ogg")
+  const cleanMime = (rawMimeType || 'audio/ogg').split(';')[0].trim().toLowerCase();
+  const mimeType = cleanMime.startsWith('audio/') ? cleanMime : 'audio/ogg';
+
+  const prompt =
+    settings.audioTranscriptionPrompt ||
+    'Transcreva fielmente o áudio enviado no WhatsApp em português. Se houver informações importantes no tom ou contexto, adicione uma breve observação entre colchetes ao final.';
+
+  const primaryModel =
+    settings.geminiAudioModel?.trim() ||
+    settings.geminiModel ||
+    config.geminiModel;
+
+  const tryAudioModel = async (modelName: string) => {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      modelName
+    )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType,
+                  data: base64Data,
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 700,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      return { ok: false as const, status: response.status, errText };
+    }
+
+    const data = (await response.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      usageMetadata?: {
+        promptTokenCount?: number;
+        candidatesTokenCount?: number;
+        totalTokenCount?: number;
+      };
+    };
+
+    const text = data.candidates?.[0]?.content?.parts
+      ?.map((p) => p.text || '')
+      .join('')
+      .trim();
+
+    if (!text) {
+      return {
+        ok: false as const,
+        status: 500,
+        errText: 'Gemini retornou transcrição vazia para o áudio.',
+      };
+    }
+
+    return {
+      ok: true as const,
+      text,
+      inputTokens: data.usageMetadata?.promptTokenCount ?? 400,
+      outputTokens:
+        data.usageMetadata?.candidatesTokenCount ?? Math.ceil(text.length / 4),
+      totalTokens: data.usageMetadata?.totalTokenCount,
+    };
+  };
+
+  let lastStatus = 0;
+  let lastError = '';
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const res = await tryAudioModel(primaryModel);
+    if (res.ok) {
+      await recordAiUsage(
+        userId,
+        'gemini',
+        primaryModel,
+        'audio',
+        res.inputTokens,
+        res.outputTokens,
+        res.totalTokens
+      );
+      return { transcript: res.text, modelUsed: primaryModel };
+    }
+    lastStatus = res.status;
+    lastError = res.errText;
+    if (res.status === 503 || res.status === 429) {
+      await sleepMs(1500 * attempt);
+    } else {
+      break;
+    }
+  }
+
+  // Fallback automático para outros modelos Flash/Lite disponíveis na conta
+  if (lastStatus === 503 || lastStatus === 429 || lastStatus === 404) {
+    const available = await listAvailableGeminiModels(userId);
+    const fallbacks = available
+      .filter(
+        (m) =>
+          m !== primaryModel &&
+          (m.includes('lite') || m.includes('flash')) &&
+          !m.includes('tts') &&
+          !m.includes('image')
+      )
+      .slice(0, 3);
+
+    for (const fb of fallbacks) {
+      const res = await tryAudioModel(fb);
+      if (res.ok) {
+        await recordAiUsage(
+          userId,
+          'gemini',
+          fb,
+          'audio',
+          res.inputTokens,
+          res.outputTokens,
+          res.totalTokens
+        );
+        return { transcript: res.text, modelUsed: fb };
+      }
+    }
+  }
+
+  throw new Error(
+    `Erro Gemini Áudio (${lastStatus}): ${lastError.slice(0, 300)}`
+  );
+}
+
+/**
  * Simulador interativo de atendimento para treinar a IA antes ou durante o uso real.
  */
 export async function simulateTrainingChat(
@@ -1250,7 +1420,10 @@ export async function extractTrainingFromConversation(
             : m.senderType === 'AI'
               ? 'IA Atual'
               : 'Campanha';
-      const extra = m.imageAnalysis ? ` [Imagem: ${m.imageAnalysis}]` : '';
+      const extraParts: string[] = [];
+      if (m.imageAnalysis) extraParts.push(`[Imagem: ${m.imageAnalysis}]`);
+      if (m.audioTranscript) extraParts.push(`[Áudio: ${m.audioTranscript}]`);
+      const extra = extraParts.length > 0 ? ` ${extraParts.join(' ')}` : '';
       return `[${who}]: ${m.body}${extra}`;
     })
     .join('\n');

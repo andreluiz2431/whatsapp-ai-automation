@@ -478,17 +478,17 @@ export function GuidePage({ onNavigate }: Props) {
             <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
               <h4 className="flex items-center gap-2 text-sm font-bold text-white">
                 <Eye className="h-4 w-4 text-emerald-400" />
-                Módulo de Leitura de Imagens &amp; Barra de Uso IA
+                Leitura de Imagens, Transcrição de Áudios &amp; Uso IA
               </h4>
               <ul className="mt-3 space-y-2 text-xs text-slate-300">
                 <li>
-                  • <strong>Ativação opcional:</strong> ative ou desative a leitura de fotos em <em>Configurações IA</em> a qualquer momento.
+                  • <strong>Leitura de Imagens (Visão IA):</strong> ative em <em>Configurações IA</em> para a IA ler comprovantes, prints e fotos (com testador por upload).
                 </li>
                 <li>
-                  • <strong>Testador integrado:</strong> envie uma imagem de teste (ex.: comprovante ou print) para validar a leitura antes de ativar em produção.
+                  • <strong>Transcrição de Áudios (Áudio IA):</strong> ative em <em>Configurações IA</em> para transcrever mensagens de voz do WhatsApp (OGG/Opus) nativamente no Gemini Free Tier e responder entendendo tudo o que foi falado.
                 </li>
                 <li>
-                  • <strong>Monitoramento ao vivo:</strong> a barra <em>Uso da IA (Hoje)</em> acima da sua conta mostra requisições, tokens reais e imagens lidas em tempo real.
+                  • <strong>Monitoramento ao vivo:</strong> a barra <em>Uso da IA (Hoje)</em> acima da sua conta mostra requisições, tokens reais, imagens e áudios processados em tempo real.
                 </li>
               </ul>
             </div>
