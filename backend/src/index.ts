@@ -15,6 +15,7 @@ import { settingsRouter } from './routes/settings';
 import { trainingRouter } from './routes/training';
 import { whatsappRouter } from './routes/whatsapp';
 import { getUserRoom, setSocketServer } from './services/activityLog';
+import { getAiUsageSummary } from './services/aiService';
 import {
   extractTokenFromHeaders,
   requireAuth,
@@ -110,6 +111,9 @@ async function bootstrap(): Promise<void> {
       'campaign:runtime',
       campaignQueueManager.getRunner(userId).getRuntimeState()
     );
+    getAiUsageSummary(userId)
+      .then((usage) => socket.emit('ai:usage', usage))
+      .catch(() => {});
   });
 
   // Endpoints públicos mínimos

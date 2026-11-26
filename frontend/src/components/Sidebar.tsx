@@ -10,8 +10,9 @@ import {
   PlayCircle,
   Settings,
   SlidersHorizontal,
+  Sparkles,
 } from 'lucide-react';
-import { AuthUser, WhatsAppState } from '../types';
+import { AiUsageSummary, AuthUser, WhatsAppState } from '../types';
 import { StatusBadge } from './StatusBadge';
 
 export type NavTab =
@@ -28,9 +29,16 @@ interface Props {
   activeTab: NavTab;
   onSelectTab: (tab: NavTab) => void;
   waState: WhatsAppState;
+  aiUsage: AiUsageSummary | null;
   unreadTotal: number;
   onToggleGlobalPause: () => void;
   onLogout: () => void;
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
 }
 
 const NAV_ITEMS: Array<{ id: NavTab; label: string; icon: typeof LayoutDashboard }> = [
@@ -48,10 +56,25 @@ export function Sidebar({
   activeTab,
   onSelectTab,
   waState,
+  aiUsage,
   unreadTotal,
   onToggleGlobalPause,
   onLogout,
 }: Props) {
+  const usagePct = aiUsage
+    ? Math.min(
+        100,
+        Math.round(
+          (aiUsage.requestsToday / Math.max(1, aiUsage.dailyRequestLimit)) * 100
+        )
+      )
+    : 0;
+  const barColor =
+    usagePct >= 90
+      ? 'bg-rose-500'
+      : usagePct >= 70
+        ? 'bg-amber-400'
+        : 'bg-emerald-400';
   return (
     <aside className="flex w-full flex-col border-b border-slate-800 bg-slate-900/90 lg:w-64 lg:shrink-0 lg:border-r lg:border-b-0">
       <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
@@ -138,6 +161,47 @@ export function Sidebar({
               Pausar Automação Global
             </>
           )}
+        </button>
+
+        {/* Barra de Uso da IA (Hoje / Mês) logo acima da conta */}
+        <button
+          type="button"
+          onClick={() => onSelectTab('settings')}
+          title={
+            aiUsage
+              ? `Hoje: ${aiUsage.requestsToday}/${aiUsage.dailyRequestLimit} req • ${aiUsage.inputTokensToday.toLocaleString('pt-BR')} in / ${aiUsage.outputTokensToday.toLocaleString('pt-BR')} out tokens • Mês: ${aiUsage.requestsMonth} req (${formatTokens(aiUsage.totalTokensMonth)} tokens) • Modelo: ${aiUsage.model}`
+              : 'Carregando consumo da IA...'
+          }
+          className="block w-full rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-left transition hover:border-slate-700"
+        >
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="flex items-center gap-1.5 font-semibold text-slate-300">
+              <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+              Uso da IA (Hoje)
+            </span>
+            <span className="font-mono font-semibold text-white">
+              {aiUsage ? `${aiUsage.requestsToday}/${aiUsage.dailyRequestLimit}` : '0/250'}
+            </span>
+          </div>
+
+          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${barColor}`}
+              style={{ width: `${usagePct}%` }}
+            />
+          </div>
+
+          <div className="mt-1.5 flex items-center justify-between text-[10px] text-slate-400">
+            <span>
+              {aiUsage ? `${formatTokens(aiUsage.totalTokensToday)} tokens` : '0 tokens'}
+              {aiUsage && aiUsage.visionToday > 0
+                ? ` • ${aiUsage.visionToday} img`
+                : ''}
+            </span>
+            <span>
+              Mês: {aiUsage ? aiUsage.requestsMonth : 0} req
+            </span>
+          </div>
         </button>
 
         {/* Perfil do Usuário + Logout */}

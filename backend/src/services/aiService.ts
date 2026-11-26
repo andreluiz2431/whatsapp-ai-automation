@@ -1,7 +1,28 @@
 import { AiRule, AiTrainingExample, UserSettings } from '@prisma/client';
 import { config } from '../config';
 import { ensureUserDefaults, prisma } from '../db';
-import { logActivity } from './activityLog';
+import { emitUserEvent, logActivity } from './activityLog';
+
+export type AiUsageFeature =
+  | 'chat'
+  | 'vision'
+  | 'summary'
+  | 'variation'
+  | 'training'
+  | 'test';
+
+export interface AiUsageSummary {
+  requestsToday: number;
+  dailyRequestLimit: number;
+  inputTokensToday: number;
+  outputTokensToday: number;
+  totalTokensToday: number;
+  visionToday: number;
+  requestsMonth: number;
+  totalTokensMonth: number;
+  provider: 'gemini' | 'ollama';
+  model: string;
+}
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
@@ -217,12 +238,101 @@ export async function listAvailableGeminiModels(userId: string): Promise<string[
   }
 }
 
+export async function getAiUsageSummary(
+  userId: string
+): Promise<AiUsageSummary> {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+
+  const [settings, todayAgg, visionToday, monthAgg] = await Promise.all([
+    getUserSettings(userId),
+    prisma.aiUsageLog.aggregate({
+      where: { userId, createdAt: { gte: startOfDay } },
+      _count: { id: true },
+      _sum: { inputTokens: true, outputTokens: true, totalTokens: true },
+    }),
+    prisma.aiUsageLog.count({
+      where: { userId, feature: 'vision', createdAt: { gte: startOfDay } },
+    }),
+    prisma.aiUsageLog.aggregate({
+      where: { userId, createdAt: { gte: startOfMonth } },
+      _count: { id: true },
+      _sum: { totalTokens: true },
+    }),
+  ]);
+
+  const provider = (settings.aiProvider || 'gemini') as 'gemini' | 'ollama';
+  const model =
+    provider === 'ollama'
+      ? settings.ollamaModel || config.ollamaModel
+      : settings.geminiModel || config.geminiModel;
+
+  return {
+    requestsToday: todayAgg._count.id || 0,
+    dailyRequestLimit: Math.max(1, settings.dailyAiRequestLimit || 250),
+    inputTokensToday: todayAgg._sum.inputTokens || 0,
+    outputTokensToday: todayAgg._sum.outputTokens || 0,
+    totalTokensToday: todayAgg._sum.totalTokens || 0,
+    visionToday,
+    requestsMonth: monthAgg._count.id || 0,
+    totalTokensMonth: monthAgg._sum.totalTokens || 0,
+    provider,
+    model,
+  };
+}
+
+async function recordAiUsage(
+  userId: string,
+  provider: 'gemini' | 'ollama',
+  model: string,
+  feature: AiUsageFeature,
+  inputTokens: number,
+  outputTokens: number,
+  totalTokens?: number
+): Promise<void> {
+  try {
+    const safeIn = Math.max(0, Math.round(inputTokens || 0));
+    const safeOut = Math.max(0, Math.round(outputTokens || 0));
+    const safeTotal = Math.max(safeIn + safeOut, Math.round(totalTokens || 0));
+
+    await prisma.aiUsageLog.create({
+      data: {
+        userId,
+        provider,
+        model,
+        feature,
+        inputTokens: safeIn,
+        outputTokens: safeOut,
+        totalTokens: safeTotal,
+      },
+    });
+
+    const summary = await getAiUsageSummary(userId);
+    emitUserEvent(userId, 'ai:usage', summary);
+  } catch (err) {
+    console.error('[AiUsage] Falha ao registrar uso da IA:', err);
+  }
+}
+
 async function callGeminiSingleModel(
   apiKey: string,
   model: string,
   systemPrompt: string,
   contents: Array<{ role: string; parts: Array<{ text: string }> }>
-): Promise<{ ok: true; text: string } | { ok: false; status: number; errText: string }> {
+): Promise<
+  | {
+      ok: true;
+      text: string;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+    }
+  | { ok: false; status: number; errText: string }
+> {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
     model
   )}:generateContent?key=${encodeURIComponent(apiKey)}`;
@@ -251,6 +361,11 @@ async function callGeminiSingleModel(
     candidates?: Array<{
       content?: { parts?: Array<{ text?: string }> };
     }>;
+    usageMetadata?: {
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+      totalTokenCount?: number;
+    };
   };
 
   const text = data.candidates?.[0]?.content?.parts
@@ -266,7 +381,19 @@ async function callGeminiSingleModel(
     };
   }
 
-  return { ok: true, text };
+  const inputTokens =
+    data.usageMetadata?.promptTokenCount ??
+    Math.ceil(
+      (systemPrompt.length +
+        contents.reduce((a, c) => a + (c.parts[0]?.text?.length || 0), 0)) /
+        4
+    );
+  const outputTokens =
+    data.usageMetadata?.candidatesTokenCount ?? Math.ceil(text.length / 4);
+  const totalTokens =
+    data.usageMetadata?.totalTokenCount ?? inputTokens + outputTokens;
+
+  return { ok: true, text, inputTokens, outputTokens, totalTokens };
 }
 
 async function callGemini(
@@ -274,7 +401,8 @@ async function callGemini(
   apiKey: string,
   model: string,
   systemPrompt: string,
-  turns: ChatTurn[]
+  turns: ChatTurn[],
+  feature: AiUsageFeature
 ): Promise<string> {
   if (!apiKey) {
     throw new Error(
@@ -296,7 +424,18 @@ async function callGemini(
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     const res = await callGeminiSingleModel(apiKey, model, systemPrompt, contents);
-    if (res.ok) return res.text;
+    if (res.ok) {
+      await recordAiUsage(
+        userId,
+        'gemini',
+        model,
+        feature,
+        res.inputTokens,
+        res.outputTokens,
+        res.totalTokens
+      );
+      return res.text;
+    }
 
     lastStatus = res.status;
     lastError = res.errText;
@@ -332,6 +471,15 @@ async function callGemini(
         contents
       );
       if (res.ok) {
+        await recordAiUsage(
+          userId,
+          'gemini',
+          fallbackModel,
+          feature,
+          res.inputTokens,
+          res.outputTokens,
+          res.totalTokens
+        );
         await logActivity(
           userId,
           'AI',
@@ -347,10 +495,12 @@ async function callGemini(
 }
 
 async function callOllama(
+  userId: string,
   baseUrl: string,
   model: string,
   systemPrompt: string,
-  turns: ChatTurn[]
+  turns: ChatTurn[],
+  feature: AiUsageFeature
 ): Promise<string> {
   const cleanUrl = baseUrl.replace(/\/+$/, '');
   const endpoint = `${cleanUrl}/api/chat`;
@@ -380,6 +530,8 @@ async function callOllama(
 
   const data = (await response.json()) as {
     message?: { content?: string };
+    prompt_eval_count?: number;
+    eval_count?: number;
   };
 
   const text = data.message?.content?.trim();
@@ -387,13 +539,24 @@ async function callOllama(
     throw new Error('O Ollama retornou uma resposta vazia.');
   }
 
+  const inputTokens =
+    data.prompt_eval_count ??
+    Math.ceil(
+      (systemPrompt.length +
+        turns.reduce((a, t) => a + t.content.length, 0)) /
+        4
+    );
+  const outputTokens = data.eval_count ?? Math.ceil(text.length / 4);
+  await recordAiUsage(userId, 'ollama', model, feature, inputTokens, outputTokens);
+
   return text;
 }
 
 async function invokeProvider(
   userId: string,
   systemPrompt: string,
-  turns: ChatTurn[]
+  turns: ChatTurn[],
+  feature: AiUsageFeature = 'chat'
 ): Promise<string> {
   const settings = await getUserSettings(userId);
   const provider = settings.aiProvider || 'gemini';
@@ -401,12 +564,12 @@ async function invokeProvider(
   if (provider === 'ollama') {
     const baseUrl = settings.ollamaBaseUrl || config.ollamaBaseUrl;
     const model = settings.ollamaModel || config.ollamaModel;
-    return callOllama(baseUrl, model, systemPrompt, turns);
+    return callOllama(userId, baseUrl, model, systemPrompt, turns, feature);
   }
 
   const apiKey = settings.geminiApiKey;
   const model = settings.geminiModel || config.geminiModel;
-  return callGemini(userId, apiKey, model, systemPrompt, turns);
+  return callGemini(userId, apiKey, model, systemPrompt, turns, feature);
 }
 
 export async function generateConversationReply(
@@ -788,11 +951,21 @@ export async function analyzeImageWithAi(
     }
     const data = (await response.json()) as {
       message?: { content?: string };
+      prompt_eval_count?: number;
+      eval_count?: number;
     };
     const description = data.message?.content?.trim();
     if (!description) {
       throw new Error('Ollama não retornou descrição para a imagem.');
     }
+    await recordAiUsage(
+      userId,
+      'ollama',
+      model,
+      'vision',
+      data.prompt_eval_count ?? 300,
+      data.eval_count ?? Math.ceil(description.length / 4)
+    );
     return { description, modelUsed: model };
   }
 
@@ -843,6 +1016,11 @@ export async function analyzeImageWithAi(
     }
     const data = (await response.json()) as {
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      usageMetadata?: {
+        promptTokenCount?: number;
+        candidatesTokenCount?: number;
+        totalTokenCount?: number;
+      };
     };
     const text = data.candidates?.[0]?.content?.parts
       ?.map((p) => p.text || '')
@@ -855,7 +1033,14 @@ export async function analyzeImageWithAi(
         errText: 'Gemini retornou resposta vazia para a imagem.',
       };
     }
-    return { ok: true as const, text };
+    return {
+      ok: true as const,
+      text,
+      inputTokens: data.usageMetadata?.promptTokenCount ?? 350,
+      outputTokens:
+        data.usageMetadata?.candidatesTokenCount ?? Math.ceil(text.length / 4),
+      totalTokens: data.usageMetadata?.totalTokenCount,
+    };
   };
 
   let lastStatus = 0;
@@ -863,6 +1048,15 @@ export async function analyzeImageWithAi(
   for (let attempt = 1; attempt <= 2; attempt++) {
     const res = await tryVisionModel(primaryModel);
     if (res.ok) {
+      await recordAiUsage(
+        userId,
+        'gemini',
+        primaryModel,
+        'vision',
+        res.inputTokens,
+        res.outputTokens,
+        res.totalTokens
+      );
       return { description: res.text, modelUsed: primaryModel };
     }
     lastStatus = res.status;
@@ -891,6 +1085,15 @@ export async function analyzeImageWithAi(
     for (const fb of fallbacks) {
       const res = await tryVisionModel(fb);
       if (res.ok) {
+        await recordAiUsage(
+          userId,
+          'gemini',
+          fb,
+          'vision',
+          res.inputTokens,
+          res.outputTokens,
+          res.totalTokens
+        );
         return { description: res.text, modelUsed: fb };
       }
     }

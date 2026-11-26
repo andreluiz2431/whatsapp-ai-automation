@@ -295,6 +295,24 @@ export function SettingsPage() {
             <p className="mt-3 text-xs text-slate-400">{aiHealth.details}</p>
           )}
 
+          <div className="mt-4 max-w-xs">
+            <label className="mb-1 block text-xs font-medium text-slate-400">
+              Limite Diário de Referência (barra lateral de uso da IA)
+            </label>
+            <input
+              type="number"
+              min={10}
+              value={settings.dailyAiRequestLimit || 250}
+              onChange={(e) =>
+                setSettings({
+                  ...settings,
+                  dailyAiRequestLimit: Number(e.target.value),
+                })
+              }
+              className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2 text-sm text-white"
+            />
+          </div>
+
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <button
               type="button"

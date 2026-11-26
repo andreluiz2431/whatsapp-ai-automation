@@ -3,11 +3,24 @@ import { prisma } from '../db';
 import {
   checkAiHealth,
   generateDailyExecutiveSummary,
+  getAiUsageSummary,
   getUserSettings,
 } from '../services/aiService';
 import { campaignQueueManager } from '../services/campaignQueue';
 
 export const dashboardRouter = Router();
+
+dashboardRouter.get('/ai-usage', async (req, res) => {
+  try {
+    const summary = await getAiUsageSummary(req.user!.id);
+    res.json(summary);
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error ? err.message : 'Erro ao consultar uso da IA.',
+    });
+  }
+});
 
 dashboardRouter.get('/overview', async (req, res) => {
   try {

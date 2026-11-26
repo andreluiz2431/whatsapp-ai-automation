@@ -5,6 +5,7 @@ import { emitUserEvent, logActivity } from '../services/activityLog';
 import {
   analyzeImageWithAi,
   checkAiHealth,
+  getAiUsageSummary,
   getUserSettings,
   listAvailableGeminiModels,
   testAiConnection,
@@ -47,6 +48,7 @@ settingsRouter.put('/', async (req, res) => {
       enableImageReading,
       geminiVisionModel,
       imageAnalysisPrompt,
+      dailyAiRequestLimit,
       defaultMinDelaySec,
       defaultMaxDelaySec,
       defaultBatchSize,
@@ -87,6 +89,14 @@ settingsRouter.put('/', async (req, res) => {
         ...(imageAnalysisPrompt !== undefined
           ? { imageAnalysisPrompt: String(imageAnalysisPrompt).trim() }
           : {}),
+        ...(dailyAiRequestLimit !== undefined
+          ? {
+              dailyAiRequestLimit: Math.max(
+                10,
+                Number(dailyAiRequestLimit) || 250
+              ),
+            }
+          : {}),
         ...(defaultMinDelaySec !== undefined
           ? { defaultMinDelaySec: Math.max(5, Number(defaultMinDelaySec) || 45) }
           : {}),
@@ -102,8 +112,12 @@ settingsRouter.put('/', async (req, res) => {
       },
     });
 
-    const aiHealth = await checkAiHealth(userId);
+    const [aiHealth, aiUsage] = await Promise.all([
+      checkAiHealth(userId),
+      getAiUsageSummary(userId),
+    ]);
     await whatsappManager.getSession(userId).broadcastStatus();
+    emitUserEvent(userId, 'ai:usage', aiUsage);
     emitUserEvent(userId, 'dashboard:refresh', {});
     await logActivity(
       userId,

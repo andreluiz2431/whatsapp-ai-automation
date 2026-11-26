@@ -38,6 +38,19 @@ export interface AiHealth {
   details: string;
 }
 
+export interface AiUsageSummary {
+  requestsToday: number;
+  dailyRequestLimit: number;
+  inputTokensToday: number;
+  outputTokensToday: number;
+  totalTokensToday: number;
+  visionToday: number;
+  requestsMonth: number;
+  totalTokensMonth: number;
+  provider: 'gemini' | 'ollama';
+  model: string;
+}
+
 export interface ActivityLogEntry {
   id: string;
   level: 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR';
@@ -197,6 +210,7 @@ export interface AppSettings {
   enableImageReading: boolean;
   geminiVisionModel: string;
   imageAnalysisPrompt: string;
+  dailyAiRequestLimit: number;
   defaultMinDelaySec: number;
   defaultMaxDelaySec: number;
   defaultBatchSize: number;

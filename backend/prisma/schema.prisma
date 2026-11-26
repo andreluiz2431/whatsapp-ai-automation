@@ -21,6 +21,7 @@ model User {
   conversations Conversation[]
   aiRules           AiRule[]
   trainingExamples  AiTrainingExample[]
+  aiUsageLogs       AiUsageLog[]
   campaigns         Campaign[]
   activityLogs      ActivityLog[]
   createdAt     DateTime       @default(now())
@@ -42,6 +43,7 @@ model UserSettings {
   enableImageReading         Boolean   @default(false)
   geminiVisionModel          String    @default("")
   imageAnalysisPrompt        String    @default("Descreva a imagem de forma objetiva em português para ajudar no atendimento de WhatsApp. Extraia textos legíveis, valores, datas, códigos, comprovantes ou detalhes do produto/erro mostrados.")
+  dailyAiRequestLimit        Int       @default(250)
   defaultMinDelaySec         Int       @default(45)
   defaultMaxDelaySec         Int       @default(120)
   defaultBatchSize           Int       @default(20)
@@ -226,6 +228,21 @@ model ActivityLog {
   message   String
   metadata  String?
   createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model AiUsageLog {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider     String   // gemini | ollama
+  model        String
+  feature      String   @default("chat") // chat | vision | summary | variation | training | test
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  totalTokens  Int      @default(0)
+  createdAt    DateTime @default(now())
 
   @@index([userId, createdAt])
 }

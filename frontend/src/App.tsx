@@ -11,6 +11,7 @@ import { RulesPage } from './pages/RulesPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { TrainingPage } from './pages/TrainingPage';
 import {
+  AiUsageSummary,
   AuthUser,
   CampaignRuntimeState,
   Conversation,
@@ -43,6 +44,7 @@ export default function App() {
   const [waState, setWaState] = useState<WhatsAppState>(INITIAL_WA_STATE);
   const [campaignRuntime, setCampaignRuntime] =
     useState<CampaignRuntimeState>(INITIAL_RUNTIME);
+  const [aiUsage, setAiUsage] = useState<AiUsageSummary | null>(null);
   const [unreadTotal, setUnreadTotal] = useState(0);
 
   const refreshUnread = useCallback(async () => {
@@ -67,6 +69,7 @@ export default function App() {
       socket.disconnect();
       setWaState(INITIAL_WA_STATE);
       setCampaignRuntime(INITIAL_RUNTIME);
+      setAiUsage(null);
       setUnreadTotal(0);
       return;
     }
@@ -77,23 +80,30 @@ export default function App() {
       .get<WhatsAppState>('/whatsapp/status')
       .then(setWaState)
       .catch(() => {});
+    api
+      .get<AiUsageSummary>('/dashboard/ai-usage')
+      .then(setAiUsage)
+      .catch(() => {});
     void refreshUnread();
 
     const onStatus = (state: WhatsAppState) => setWaState(state);
     const onQr = ({ qrDataUrl }: { qrDataUrl: string | null }) =>
       setWaState((prev) => ({ ...prev, qrDataUrl }));
     const onRuntime = (rt: CampaignRuntimeState) => setCampaignRuntime(rt);
+    const onAiUsage = (usage: AiUsageSummary) => setAiUsage(usage);
     const onConvUpdated = () => void refreshUnread();
 
     socket.on('whatsapp:status', onStatus);
     socket.on('whatsapp:qr', onQr);
     socket.on('campaign:runtime', onRuntime);
+    socket.on('ai:usage', onAiUsage);
     socket.on('conversation:updated', onConvUpdated);
 
     return () => {
       socket.off('whatsapp:status', onStatus);
       socket.off('whatsapp:qr', onQr);
       socket.off('campaign:runtime', onRuntime);
+      socket.off('ai:usage', onAiUsage);
       socket.off('conversation:updated', onConvUpdated);
       socket.disconnect();
     };
@@ -141,6 +151,7 @@ export default function App() {
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         waState={waState}
+        aiUsage={aiUsage}
         unreadTotal={unreadTotal}
         onToggleGlobalPause={handleToggleGlobalPause}
         onLogout={handleLogout}
