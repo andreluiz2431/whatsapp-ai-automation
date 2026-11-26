@@ -1,0 +1,12 @@
+node_modules
+backend/node_modules
+frontend/node_modules
+backend/dist
+frontend/dist
+backend/auth_session
+backend/prisma/*.db
+backend/prisma/*.db-journal
+.env
+backend/.env
+.git
+*.log
