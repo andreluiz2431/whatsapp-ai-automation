@@ -12,6 +12,7 @@ import {
   SlidersHorizontal,
   Sparkles,
 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { AiUsageSummary, AuthUser, WhatsAppState } from '../types';
 import { StatusBadge } from './StatusBadge';
 
@@ -61,6 +62,27 @@ export function Sidebar({
   onToggleGlobalPause,
   onLogout,
 }: Props) {
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!accountMenuOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setAccountMenuOpen(false);
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setAccountMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [accountMenuOpen]);
+
   const usagePct = aiUsage
     ? Math.min(
         100,
@@ -100,13 +122,130 @@ export function Sidebar({
             </button>
           )}
           <StatusBadge status={waState.status} compact />
-          <button
-            onClick={onLogout}
-            title="Sair"
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-rose-300"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
+
+          {/* Avatar da conta logada com menu suspenso (mobile / zoom > 125%) */}
+          <div ref={menuRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setAccountMenuOpen((v) => !v)}
+              title={`${user.name} (${user.email})`}
+              aria-label="Menu da conta"
+              className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full ring-2 ring-slate-700 transition hover:ring-emerald-400 focus:outline-none focus:ring-emerald-400"
+            >
+              {user.avatarUrl ? (
+                <img
+                  src={user.avatarUrl}
+                  alt={user.name}
+                  referrerPolicy="no-referrer"
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="flex h-full w-full items-center justify-center bg-emerald-500/20 text-xs font-bold text-emerald-300">
+                  {user.name.slice(0, 2).toUpperCase()}
+                </span>
+              )}
+            </button>
+
+            {accountMenuOpen && (
+              <div className="absolute right-0 top-full z-50 mt-2 w-64 space-y-2.5 rounded-2xl border border-slate-800 bg-slate-900 p-3 shadow-2xl">
+                <div className="flex items-center gap-2.5 border-b border-slate-800 pb-2.5">
+                  {user.avatarUrl ? (
+                    <img
+                      src={user.avatarUrl}
+                      alt={user.name}
+                      referrerPolicy="no-referrer"
+                      className="h-9 w-9 shrink-0 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-xs font-bold text-emerald-300">
+                      {user.name.slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-bold text-white">
+                      {user.name}
+                    </p>
+                    <p className="truncate text-[11px] text-slate-400">
+                      {user.email}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Barra de uso da IA no menu da conta */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccountMenuOpen(false);
+                    onSelectTab('settings');
+                  }}
+                  className="block w-full rounded-xl border border-slate-800 bg-slate-950/70 p-2.5 text-left transition hover:border-slate-700"
+                >
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="flex items-center gap-1 font-semibold text-slate-300">
+                      <Sparkles className="h-3 w-3 text-emerald-400" />
+                      Uso da IA (Hoje)
+                    </span>
+                    <span className="font-mono font-semibold text-white">
+                      {aiUsage
+                        ? `${aiUsage.requestsToday}/${aiUsage.dailyRequestLimit}`
+                        : '0/250'}
+                    </span>
+                  </div>
+                  <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${barColor}`}
+                      style={{ width: `${usagePct}%` }}
+                    />
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-[10px] text-slate-400">
+                    <span>
+                      {aiUsage
+                        ? `${formatTokens(aiUsage.totalTokensToday)} tokens`
+                        : '0 tokens'}
+                    </span>
+                    <span>Mês: {aiUsage ? aiUsage.requestsMonth : 0} req</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    onToggleGlobalPause();
+                    setAccountMenuOpen(false);
+                  }}
+                  className={`flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition ${
+                    waState.globalAutomationPaused
+                      ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40'
+                      : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
+                  }`}
+                >
+                  {waState.globalAutomationPaused ? (
+                    <>
+                      <PlayCircle className="h-3.5 w-3.5" />
+                      Retomar IA Global
+                    </>
+                  ) : (
+                    <>
+                      <PauseCircle className="h-3.5 w-3.5" />
+                      Pausar IA Global
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccountMenuOpen(false);
+                    onLogout();
+                  }}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-300 transition hover:bg-rose-500/20"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  Sair da conta
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
