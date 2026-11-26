@@ -101,9 +101,11 @@ export function Sidebar({
     <aside className="flex w-full flex-col border-b border-slate-800 bg-slate-900/90 lg:h-full lg:max-h-screen lg:w-64 lg:shrink-0 lg:overflow-y-auto lg:border-r lg:border-b-0">
       <div className="flex shrink-0 items-center justify-between border-b border-slate-800 px-5 py-3.5">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/30">
-            <Bot className="h-5 w-5" />
-          </div>
+          <img
+            src="/favicon.svg"
+            alt="ZapFlow AI"
+            className="h-9 w-9 rounded-xl shadow-sm"
+          />
           <div>
             <h1 className="text-sm font-bold tracking-tight text-white">ZapFlow AI</h1>
             <p className="text-[11px] text-slate-400">WhatsApp 100% Gratuito</p>

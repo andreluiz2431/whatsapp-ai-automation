@@ -124,9 +124,11 @@ export function AuthPage({ onAuthenticated }: Props) {
     <div className="flex min-h-screen items-center justify-center bg-slate-950 p-4 text-slate-100">
       <div className="w-full max-w-md space-y-6 rounded-3xl border border-slate-800 bg-slate-900/80 p-8 shadow-2xl">
         <div className="text-center">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30">
-            <Bot className="h-8 w-8" />
-          </div>
+          <img
+            src="/favicon.svg"
+            alt="ZapFlow AI"
+            className="mx-auto h-14 w-14 rounded-2xl shadow-lg"
+          />
           <h1 className="mt-4 text-2xl font-bold tracking-tight text-white">
             ZapFlow AI
           </h1>
