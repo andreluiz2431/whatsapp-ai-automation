@@ -76,8 +76,8 @@ export function Sidebar({
         ? 'bg-amber-400'
         : 'bg-emerald-400';
   return (
-    <aside className="flex w-full flex-col border-b border-slate-800 bg-slate-900/90 lg:w-64 lg:shrink-0 lg:border-r lg:border-b-0">
-      <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
+    <aside className="flex w-full flex-col border-b border-slate-800 bg-slate-900/90 lg:h-full lg:max-h-screen lg:w-64 lg:shrink-0 lg:overflow-y-auto lg:border-r lg:border-b-0">
+      <div className="flex shrink-0 items-center justify-between border-b border-slate-800 px-5 py-3.5">
         <div className="flex items-center gap-2.5">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/30">
             <Bot className="h-5 w-5" />
@@ -88,6 +88,17 @@ export function Sidebar({
           </div>
         </div>
         <div className="flex items-center gap-2 lg:hidden">
+          {aiUsage && (
+            <button
+              type="button"
+              onClick={() => onSelectTab('settings')}
+              title="Uso da IA hoje"
+              className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-950 px-2 py-0.5 font-mono text-[11px] text-emerald-300"
+            >
+              <Sparkles className="h-3 w-3" />
+              {aiUsage.requestsToday}/{aiUsage.dailyRequestLimit}
+            </button>
+          )}
           <StatusBadge status={waState.status} compact />
           <button
             onClick={onLogout}
@@ -99,7 +110,7 @@ export function Sidebar({
         </div>
       </div>
 
-      <nav className="flex gap-1 overflow-x-auto p-3 lg:flex-1 lg:flex-col lg:overflow-visible">
+      <nav className="flex shrink-0 gap-1 overflow-x-auto p-2.5 lg:flex-col lg:overflow-visible">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
           const active = activeTab === item.id;
@@ -107,7 +118,7 @@ export function Sidebar({
             <button
               key={item.id}
               onClick={() => onSelectTab(item.id)}
-              className={`flex shrink-0 items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-medium transition ${
+              className={`flex shrink-0 items-center justify-between rounded-xl px-3.5 py-2 text-sm font-medium transition ${
                 active
                   ? 'bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30'
                   : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200'
@@ -127,7 +138,7 @@ export function Sidebar({
         })}
       </nav>
 
-      <div className="hidden space-y-3 border-t border-slate-800 p-4 lg:block">
+      <div className="hidden shrink-0 space-y-2.5 border-t border-slate-800 p-3.5 lg:mt-auto lg:block">
         <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-[11px] font-medium uppercase tracking-wider text-slate-500">
