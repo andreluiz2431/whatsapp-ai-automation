@@ -14,7 +14,7 @@ export const config = {
   ),
   aiProvider: (process.env.AI_PROVIDER || 'gemini') as 'gemini' | 'ollama',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
-  geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
   ollamaModel: process.env.OLLAMA_MODEL || 'llama3.2',
   defaultMinDelaySec: Number(process.env.DEFAULT_MIN_DELAY_SEC || 45),

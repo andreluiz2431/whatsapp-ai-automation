@@ -25,6 +25,12 @@ export async function ensureDefaults(): Promise<void> {
     },
   });
 
+  // Migra automaticamente o modelo descontinuado gemini-2.5-flash para o modelo configurado
+  await prisma.appSettings.updateMany({
+    where: { id: 1, geminiModel: 'gemini-2.5-flash' },
+    data: { geminiModel: config.geminiModel },
+  });
+
   // 2. Garante tags padrão úteis
   const defaultTags = [
     { name: 'Leads', color: '#3b82f6' },

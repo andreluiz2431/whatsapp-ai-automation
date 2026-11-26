@@ -146,7 +146,7 @@ model AppSettings {
   id                         Int       @id @default(1)
   aiProvider                 String    @default("gemini") // gemini | ollama
   geminiApiKey               String    @default("")
-  geminiModel                String    @default("gemini-2.5-flash")
+  geminiModel                String    @default("gemini-3.8-flash")
   ollamaBaseUrl              String    @default("http://localhost:11434")
   ollamaModel                String    @default("llama3.2")
   globalAutomationPaused     Boolean   @default(false)

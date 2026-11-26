@@ -183,7 +183,7 @@ export function SettingsPage() {
                   onChange={(e) =>
                     setSettings({ ...settings, geminiModel: e.target.value })
                   }
-                  placeholder="gemini-2.5-flash"
+                  placeholder="gemini-3.8-flash"
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white"
                 />
               </div>
