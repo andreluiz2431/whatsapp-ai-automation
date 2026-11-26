@@ -122,8 +122,33 @@ export interface Message {
   direction: 'INBOUND' | 'OUTBOUND';
   senderType: 'CONTACT' | 'AI' | 'HUMAN' | 'CAMPAIGN';
   body: string;
+  mediaType?: string | null;
+  imageAnalysis?: string | null;
   status: string;
   createdAt: string;
+}
+
+export interface AiTrainingExample {
+  id: string;
+  ruleId: string | null;
+  rule?: { id: string; name: string; scope: string } | null;
+  customerMessage: string;
+  idealResponse: string;
+  feedbackNote: string | null;
+  source: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TrainingExtractionResult {
+  suggestedExamples: Array<{
+    customerMessage: string;
+    idealResponse: string;
+    feedbackNote: string;
+  }>;
+  knowledgeAdditions: string;
+  promptTips: string;
 }
 
 export interface CampaignItem {
@@ -169,6 +194,9 @@ export interface AppSettings {
   globalAutomationPaused: boolean;
   autoPauseOnManualSend: boolean;
   autoSummarizeConversations: boolean;
+  enableImageReading: boolean;
+  geminiVisionModel: string;
+  imageAnalysisPrompt: string;
   defaultMinDelaySec: number;
   defaultMaxDelaySec: number;
   defaultBatchSize: number;

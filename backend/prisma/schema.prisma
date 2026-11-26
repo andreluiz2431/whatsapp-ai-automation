@@ -19,9 +19,10 @@ model User {
   contacts      Contact[]
   tags          Tag[]
   conversations Conversation[]
-  aiRules       AiRule[]
-  campaigns     Campaign[]
-  activityLogs  ActivityLog[]
+  aiRules           AiRule[]
+  trainingExamples  AiTrainingExample[]
+  campaigns         Campaign[]
+  activityLogs      ActivityLog[]
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 }
@@ -38,6 +39,9 @@ model UserSettings {
   globalAutomationPaused     Boolean   @default(false)
   autoPauseOnManualSend      Boolean   @default(true)
   autoSummarizeConversations Boolean   @default(false)
+  enableImageReading         Boolean   @default(false)
+  geminiVisionModel          String    @default("")
+  imageAnalysisPrompt        String    @default("Descreva a imagem de forma objetiva em português para ajudar no atendimento de WhatsApp. Extraia textos legíveis, valores, datas, códigos, comprovantes ou detalhes do produto/erro mostrados.")
   defaultMinDelaySec         Int       @default(45)
   defaultMaxDelaySec         Int       @default(120)
   defaultBatchSize           Int       @default(20)
@@ -119,6 +123,8 @@ model Message {
   direction      String       // INBOUND | OUTBOUND
   senderType     String       // CONTACT | AI | HUMAN | CAMPAIGN
   body           String
+  mediaType      String?      // image | null
+  imageAnalysis  String?
   status         String       @default("SENT") // PENDING | SENT | DELIVERED | READ | FAILED
   createdAt      DateTime     @default(now())
 
@@ -142,11 +148,29 @@ model AiRule {
   knowledgeBase         String
   stopCondition         String
   campaigns             Campaign[]
-  assignedConversations Conversation[] @relation("ConversationAssignedRule")
-  createdAt             DateTime       @default(now())
-  updatedAt             DateTime       @updatedAt
+  assignedConversations Conversation[]      @relation("ConversationAssignedRule")
+  trainingExamples      AiTrainingExample[]
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
 
   @@index([userId, scope, isActive])
+}
+
+model AiTrainingExample {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ruleId          String?
+  rule            AiRule?  @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  customerMessage String
+  idealResponse   String
+  feedbackNote    String?
+  source          String   @default("MANUAL") // MANUAL | SIMULATOR | CONVERSATION
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId, ruleId, isActive])
 }
 
 model Campaign {

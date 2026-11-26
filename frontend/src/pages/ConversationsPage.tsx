@@ -1,5 +1,6 @@
 import {
   Bot,
+  Eye,
   Megaphone,
   MessageSquarePlus,
   Search,
@@ -513,6 +514,17 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
                         {msg.senderType === 'CONTACT' && <span>Cliente</span>}
                       </div>
                       <p className="whitespace-pre-wrap leading-relaxed">{msg.body}</p>
+                      {msg.imageAnalysis && (
+                        <div className="mt-2 rounded-xl border border-emerald-500/25 bg-slate-950/70 p-2.5 text-xs text-slate-200">
+                          <p className="mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-emerald-300">
+                            <Eye className="h-3 w-3" />
+                            Leitura da Imagem (IA)
+                          </p>
+                          <p className="whitespace-pre-wrap leading-relaxed text-slate-300">
+                            {msg.imageAnalysis}
+                          </p>
+                        </div>
+                      )}
                       <p className="mt-1 text-right text-[10px] opacity-60">
                         {new Date(msg.createdAt).toLocaleTimeString('pt-BR', {
                           hour: '2-digit',

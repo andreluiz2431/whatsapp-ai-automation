@@ -9,6 +9,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { GuidePage } from './pages/GuidePage';
 import { RulesPage } from './pages/RulesPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { TrainingPage } from './pages/TrainingPage';
 import {
   AuthUser,
   CampaignRuntimeState,
@@ -158,6 +159,7 @@ export default function App() {
           <ConversationsPage waState={waState} onUnreadChange={refreshUnread} />
         )}
         {activeTab === 'rules' && <RulesPage />}
+        {activeTab === 'training' && <TrainingPage />}
         {activeTab === 'campaigns' && (
           <CampaignsPage
             waState={waState}

@@ -12,6 +12,7 @@ import { conversationsRouter } from './routes/conversations';
 import { dashboardRouter } from './routes/dashboard';
 import { rulesRouter } from './routes/rules';
 import { settingsRouter } from './routes/settings';
+import { trainingRouter } from './routes/training';
 import { whatsappRouter } from './routes/whatsapp';
 import { getUserRoom, setSocketServer } from './services/activityLog';
 import {
@@ -124,6 +125,7 @@ async function bootstrap(): Promise<void> {
   app.use('/api/rules', requireAuth, rulesRouter);
   app.use('/api/campaigns', requireAuth, campaignsRouter);
   app.use('/api/settings', requireAuth, settingsRouter);
+  app.use('/api/training', requireAuth, trainingRouter);
 
   // Serve o frontend compilado em produção (Railway single-service deploy)
   const frontendDist = path.resolve(__dirname, '../../frontend/dist');

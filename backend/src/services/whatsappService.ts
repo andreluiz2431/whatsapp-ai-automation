@@ -2,6 +2,7 @@ import makeWASocket, {
   Browsers,
   DisconnectReason,
   WASocket,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
   proto,
   useMultiFileAuthState,
@@ -16,6 +17,7 @@ import { prisma } from '../db';
 import { WhatsAppConnectionStatus, WhatsAppStatePayload } from '../types';
 import { emitUserEvent, logActivity } from './activityLog';
 import {
+  analyzeImageWithAi,
   generateConversationReply,
   generateConversationSummary,
 } from './aiService';
@@ -429,11 +431,76 @@ class UserWhatsAppSession {
         return;
       }
 
-      const body = extractTextFromMessage(msg.message).trim();
+      const imageMsg = msg.message?.imageMessage;
+      const caption = imageMsg?.caption?.trim() || '';
+      let body = extractTextFromMessage(msg.message).trim();
+      let mediaType: string | null = null;
+      let imageAnalysis: string | null = null;
+
+      if (imageMsg) {
+        mediaType = 'image';
+        if (!body) {
+          body = caption ? `[Imagem] ${caption}` : '[Imagem enviada]';
+        }
+      }
+
       if (!body) return;
+
+      const settings = await prisma.userSettings.findUnique({
+        where: { userId: this.userId },
+      });
 
       const phone = remoteJid.split('@')[0].replace(/\D/g, '');
       const pushName = msg.pushName?.trim() || null;
+
+      // Se o módulo de leitura de imagens estiver ativo para este usuário, analisa com IA multimodal
+      if (imageMsg && settings?.enableImageReading) {
+        try {
+          const mediaBuffer = (await downloadMediaMessage(
+            msg,
+            'buffer',
+            {},
+            {
+              logger,
+              reuploadRequest: this.sock!.updateMediaMessage,
+            }
+          )) as Buffer;
+
+          const maxBytes = 6 * 1024 * 1024; // Limite de 6MB por segurança
+          if (mediaBuffer && mediaBuffer.length > 0 && mediaBuffer.length <= maxBytes) {
+            const mimeType = imageMsg.mimetype || 'image/jpeg';
+            const vision = await analyzeImageWithAi(
+              this.userId,
+              mediaBuffer.toString('base64'),
+              mimeType,
+              caption || undefined
+            );
+            imageAnalysis = vision.description;
+            await logActivity(
+              this.userId,
+              'AI',
+              `Imagem recebida de ${pushName || phone} analisada com sucesso (${vision.modelUsed}).`,
+              'SUCCESS'
+            );
+          } else if (mediaBuffer && mediaBuffer.length > maxBytes) {
+            await logActivity(
+              this.userId,
+              'AI',
+              `Imagem de ${pushName || phone} excedeu 6MB e foi ignorada na leitura de visão.`,
+              'WARN'
+            );
+          }
+        } catch (visionErr) {
+          await logActivity(
+            this.userId,
+            'AI',
+            `Falha ao ler imagem de ${pushName || phone}: ${
+              visionErr instanceof Error ? visionErr.message : 'erro desconhecido'
+            }`,
+            'ERROR'
+          );
+        }
+      }
 
       const contact = await prisma.contact.upsert({
         where: { userId_jid: { userId: this.userId, jid: remoteJid } },
@@ -487,6 +554,8 @@ class UserWhatsAppSession {
           direction: 'INBOUND',
           senderType: 'CONTACT',
           body,
+          mediaType,
+          imageAnalysis,
           status: 'DELIVERED',
         },
       });
@@ -499,13 +568,10 @@ class UserWhatsAppSession {
       await logActivity(
         this.userId,
         'WHATSAPP',
-        `Mensagem recebida de ${contactLabel}.`,
+        `${imageMsg ? 'Imagem' : 'Mensagem'} recebida de ${contactLabel}.`,
         'INFO'
       );
 
-      const settings = await prisma.userSettings.findUnique({
-        where: { userId: this.userId },
-      });
       if (settings?.globalAutomationPaused) {
         await logActivity(
           this.userId,

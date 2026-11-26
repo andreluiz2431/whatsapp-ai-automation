@@ -1,11 +1,21 @@
-import { AiRule, UserSettings } from '@prisma/client';
+import { AiRule, AiTrainingExample, UserSettings } from '@prisma/client';
 import { config } from '../config';
 import { ensureUserDefaults, prisma } from '../db';
 import { logActivity } from './activityLog';
 
-interface ChatTurn {
+export interface ChatTurn {
   role: 'user' | 'assistant';
   content: string;
+}
+
+export interface TrainingExtractionResult {
+  suggestedExamples: Array<{
+    customerMessage: string;
+    idealResponse: string;
+    feedbackNote: string;
+  }>;
+  knowledgeAdditions: string;
+  promptTips: string;
 }
 
 export interface ResolvedRuleResult {
@@ -96,9 +106,25 @@ export async function resolveRuleForContact(
   return { rule: null, levelLabel: 'Padrão' };
 }
 
+async function getTrainingExamplesForRule(
+  userId: string,
+  ruleId?: string | null
+): Promise<AiTrainingExample[]> {
+  return prisma.aiTrainingExample.findMany({
+    where: {
+      userId,
+      isActive: true,
+      OR: ruleId ? [{ ruleId }, { ruleId: null }] : [{ ruleId: null }],
+    },
+    orderBy: { updatedAt: 'desc' },
+    take: 15,
+  });
+}
+
 function buildSystemPrompt(
   rule: AiRule | null,
-  contactName: string | null
+  contactName: string | null,
+  trainingExamples: AiTrainingExample[] = []
 ): string {
   const objective =
     rule?.objective ||
@@ -110,6 +136,25 @@ function buildSystemPrompt(
   const stopCondition =
     rule?.stopCondition ||
     'Se o cliente pedir explicitamente para falar com um humano ou apresentar um problema crítico.';
+
+  const examplesBlock =
+    trainingExamples.length > 0
+      ? [
+          '',
+          '### EXEMPLOS DE ATENDIMENTO APROVADOS (TREINAMENTO)',
+          'Use estes exemplos reais e correções como referência prioritária de estilo e precisão:',
+          ...trainingExamples.map((ex, idx) =>
+            [
+              `Exemplo ${idx + 1}:`,
+              `- Cliente: ${ex.customerMessage}`,
+              `- Resposta ideal: ${ex.idealResponse}`,
+              ex.feedbackNote ? `- Observação: ${ex.feedbackNote}` : '',
+            ]
+              .filter(Boolean)
+              .join('\n')
+          ),
+        ].join('\n')
+      : '';
 
   return [
     'Você é um assistente virtual de atendimento no WhatsApp.',
@@ -123,6 +168,7 @@ function buildSystemPrompt(
     '',
     '### INFORMAÇÕES DE CONTEXTO / BASE DE CONHECIMENTO',
     knowledge,
+    examplesBlock,
     '',
     '### CONDIÇÃO DE PARADA / TRANSFERÊNCIA PARA HUMANO',
     stopCondition,
@@ -388,18 +434,22 @@ export async function generateConversationReply(
     conversation.activeRuleId
   );
 
-  const systemPrompt = buildSystemPrompt(rule, conversation.contact.name);
+  const examples = await getTrainingExamplesForRule(userId, rule?.id);
+  const systemPrompt = buildSystemPrompt(rule, conversation.contact.name, examples);
 
   const ordered = [...conversation.messages].reverse();
   const turns: ChatTurn[] = [];
   for (const msg of ordered) {
     const role: 'user' | 'assistant' =
       msg.direction === 'INBOUND' ? 'user' : 'assistant';
+    const contentText = msg.imageAnalysis
+      ? `${msg.body}\n[Conteúdo lido da imagem enviada]: ${msg.imageAnalysis}`
+      : msg.body;
     const prev = turns[turns.length - 1];
     if (prev && prev.role === role) {
-      prev.content = `${prev.content}\n${msg.body}`;
+      prev.content = `${prev.content}\n${contentText}`;
     } else {
-      turns.push({ role, content: msg.body });
+      turns.push({ role, content: contentText });
     }
   }
 
@@ -688,4 +738,333 @@ export async function testAiConnection(userId: string): Promise<{
       error: err instanceof Error ? err.message : 'Erro desconhecido ao testar IA.',
     };
   }
+}
+
+/**
+ * Leitura multimodal de imagens usando Gemini Flash/Flash-Lite (nativo no Free Tier)
+ * ou Ollama multimodal (ex: llama3.2-vision, gemma3, llava).
+ */
+export async function analyzeImageWithAi(
+  userId: string,
+  base64Data: string,
+  mimeType: string,
+  caption?: string
+): Promise<{ description: string; modelUsed: string }> {
+  const settings = await getUserSettings(userId);
+  const provider = settings.aiProvider || 'gemini';
+  const promptBase =
+    settings.imageAnalysisPrompt ||
+    'Descreva a imagem de forma objetiva em português para ajudar no atendimento de WhatsApp. Extraia textos legíveis, valores, datas, códigos, comprovantes ou detalhes do produto/erro mostrados.';
+  const fullPrompt = caption
+    ? `${promptBase}\n\nLegenda enviada pelo cliente junto com a imagem: "${caption}"`
+    : promptBase;
+
+  if (provider === 'ollama') {
+    const baseUrl = (settings.ollamaBaseUrl || config.ollamaBaseUrl).replace(
+      /\/+$/,
+      ''
+    );
+    const model = settings.ollamaModel || config.ollamaModel;
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        stream: false,
+        messages: [
+          {
+            role: 'user',
+            content: fullPrompt,
+            images: [base64Data],
+          },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(
+        `Erro Ollama Vision (${response.status}): ${errText.slice(0, 260)}`
+      );
+    }
+    const data = (await response.json()) as {
+      message?: { content?: string };
+    };
+    const description = data.message?.content?.trim();
+    if (!description) {
+      throw new Error('Ollama não retornou descrição para a imagem.');
+    }
+    return { description, modelUsed: model };
+  }
+
+  const apiKey = settings.geminiApiKey;
+  if (!apiKey) {
+    throw new Error(
+      'GEMINI_API_KEY não configurada na sua conta para leitura de imagens.'
+    );
+  }
+
+  const primaryModel =
+    settings.geminiVisionModel?.trim() ||
+    settings.geminiModel ||
+    config.geminiModel;
+
+  const tryVisionModel = async (modelName: string) => {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      modelName
+    )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: fullPrompt },
+              {
+                inlineData: {
+                  mimeType: mimeType || 'image/jpeg',
+                  data: base64Data,
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 500,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      return { ok: false as const, status: response.status, errText };
+    }
+    const data = (await response.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = data.candidates?.[0]?.content?.parts
+      ?.map((p) => p.text || '')
+      .join('')
+      .trim();
+    if (!text) {
+      return {
+        ok: false as const,
+        status: 500,
+        errText: 'Gemini retornou resposta vazia para a imagem.',
+      };
+    }
+    return { ok: true as const, text };
+  };
+
+  let lastStatus = 0;
+  let lastError = '';
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const res = await tryVisionModel(primaryModel);
+    if (res.ok) {
+      return { description: res.text, modelUsed: primaryModel };
+    }
+    lastStatus = res.status;
+    lastError = res.errText;
+    if (res.status === 503 || res.status === 429) {
+      await sleepMs(1500 * attempt);
+    } else {
+      break;
+    }
+  }
+
+  // Fallback automático para modelos Flash/Lite da conta
+  if (lastStatus === 503 || lastStatus === 429 || lastStatus === 404) {
+    const available = await listAvailableGeminiModels(userId);
+    const fallbacks = available
+      .filter(
+        (m) =>
+          m !== primaryModel &&
+          (m.includes('lite') || m.includes('flash')) &&
+          !m.includes('tts') &&
+          !m.includes('image') &&
+          !m.includes('audio')
+      )
+      .slice(0, 3);
+
+    for (const fb of fallbacks) {
+      const res = await tryVisionModel(fb);
+      if (res.ok) {
+        return { description: res.text, modelUsed: fb };
+      }
+    }
+  }
+
+  throw new Error(
+    `Erro Gemini Vision (${lastStatus}): ${lastError.slice(0, 300)}`
+  );
+}
+
+/**
+ * Simulador interativo de atendimento para treinar a IA antes ou durante o uso real.
+ */
+export async function simulateTrainingChat(
+  userId: string,
+  ruleId: string | null,
+  turns: ChatTurn[]
+): Promise<{ reply: string; ruleName: string; shouldTransferToHuman: boolean }> {
+  let rule: AiRule | null = null;
+  if (ruleId) {
+    rule = await prisma.aiRule.findFirst({ where: { id: ruleId, userId } });
+  }
+  if (!rule) {
+    rule = await prisma.aiRule.findFirst({
+      where: { userId, scope: 'GLOBAL', isActive: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  const examples = await getTrainingExamplesForRule(userId, rule?.id);
+  const systemPrompt = buildSystemPrompt(rule, 'Cliente (Simulação)', examples);
+
+  const rawText = await invokeProvider(userId, systemPrompt, turns);
+  const shouldTransferToHuman = rawText.includes(TRANSFER_TOKEN);
+  const cleanText = rawText.replace(TRANSFER_TOKEN, '').trim();
+
+  return {
+    reply: cleanText || 'Transferindo para um atendente humano.',
+    ruleName: rule?.name || 'Padrão do Sistema',
+    shouldTransferToHuman,
+  };
+}
+
+/**
+ * Analisa um histórico de conversa (real do WhatsApp ou do Simulador de Treino)
+ * e extrai exemplos de treinamento (few-shot) + lacunas na base de conhecimento.
+ */
+export async function extractTrainingFromTranscript(
+  userId: string,
+  transcript: string,
+  userFeedback?: string,
+  ruleId?: string | null
+): Promise<TrainingExtractionResult> {
+  let ruleContext = '';
+  if (ruleId) {
+    const rule = await prisma.aiRule.findFirst({ where: { id: ruleId, userId } });
+    if (rule) {
+      ruleContext = `\nRegra atual alvo: "${rule.name}"\nObjetivo atual: ${rule.objective}\nBase de conhecimento atual: ${rule.knowledgeBase}\n`;
+    }
+  }
+
+  const systemPrompt = [
+    'Você é um especialista em treinamento e engenharia de prompts para assistentes de WhatsApp.',
+    'Analise o histórico da conversa abaixo e o feedback do usuário (se houver).',
+    'Extraia os melhores exemplos de treinamento (pergunta do cliente -> resposta ideal aprimorada) e sugestões concretas para enriquecer a Base de Conhecimento.',
+    'Responda ESTRITAMENTE em JSON válido (sem markdown ```json, sem texto fora do JSON) no formato:',
+    '{',
+    '  "suggestedExamples": [',
+    '    { "customerMessage": "...", "idealResponse": "...", "feedbackNote": "..." }',
+    '  ],',
+    '  "knowledgeAdditions": "Texto curto em tópicos para adicionar na Base de Conhecimento da regra (ou string vazia se não precisar)",',
+    '  "promptTips": "Resumo curto em português com 2 a 3 recomendações práticas para melhorar o atendimento"',
+    '}',
+  ].join('\n');
+
+  const userPrompt = [
+    ruleContext,
+    userFeedback ? `Feedback / instruções do usuário:\n${userFeedback}\n` : '',
+    `Histórico da conversa:\n${transcript}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const raw = await invokeProvider(userId, systemPrompt, [
+    { role: 'user', content: userPrompt },
+  ]);
+
+  // Remove eventuais blocos ```json ... ``` que o modelo incluir
+  const cleaned = raw
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+
+  const jsonStart = cleaned.indexOf('{');
+  const jsonEnd = cleaned.lastIndexOf('}');
+  const jsonSlice =
+    jsonStart !== -1 && jsonEnd !== -1
+      ? cleaned.slice(jsonStart, jsonEnd + 1)
+      : cleaned;
+
+  try {
+    const parsed = JSON.parse(jsonSlice) as Partial<TrainingExtractionResult>;
+    return {
+      suggestedExamples: Array.isArray(parsed.suggestedExamples)
+        ? parsed.suggestedExamples
+            .filter((e) => e?.customerMessage && e?.idealResponse)
+            .slice(0, 6)
+            .map((e) => ({
+              customerMessage: String(e.customerMessage).trim(),
+              idealResponse: String(e.idealResponse).trim(),
+              feedbackNote: String(e.feedbackNote || '').trim(),
+            }))
+        : [],
+      knowledgeAdditions: String(parsed.knowledgeAdditions || '').trim(),
+      promptTips: String(parsed.promptTips || '').trim(),
+    };
+  } catch {
+    return {
+      suggestedExamples: [],
+      knowledgeAdditions: '',
+      promptTips: raw,
+    };
+  }
+}
+
+export async function extractTrainingFromConversation(
+  userId: string,
+  conversationId: string,
+  userFeedback?: string,
+  ruleId?: string | null
+): Promise<TrainingExtractionResult> {
+  const conv = await prisma.conversation.findFirst({
+    where: { id: conversationId, userId },
+    include: {
+      contact: true,
+      messages: { orderBy: { createdAt: 'asc' }, take: 80 },
+    },
+  });
+  if (!conv) {
+    throw new Error('Conversa não encontrada.');
+  }
+  if (conv.messages.length === 0) {
+    throw new Error('Esta conversa ainda não possui mensagens para analisar.');
+  }
+
+  const transcript = conv.messages
+    .map((m) => {
+      const who =
+        m.direction === 'INBOUND'
+          ? `Cliente (${conv.contact.name || conv.contact.phone})`
+          : m.senderType === 'HUMAN'
+            ? 'Atendente Humano (referência)'
+            : m.senderType === 'AI'
+              ? 'IA Atual'
+              : 'Campanha';
+      const extra = m.imageAnalysis ? ` [Imagem: ${m.imageAnalysis}]` : '';
+      return `[${who}]: ${m.body}${extra}`;
+    })
+    .join('\n');
+
+  const result = await extractTrainingFromTranscript(
+    userId,
+    transcript,
+    userFeedback,
+    ruleId || conv.activeRuleId
+  );
+
+  await logActivity(
+    userId,
+    'AI',
+    `Histórico da conversa com ${conv.contact.name || conv.contact.phone} analisado para treinamento (${result.suggestedExamples.length} exemplo(s) sugerido(s)).`,
+    'SUCCESS'
+  );
+
+  return result;
 }

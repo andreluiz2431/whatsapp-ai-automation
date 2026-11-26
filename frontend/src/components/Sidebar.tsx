@@ -1,6 +1,7 @@
 import {
   BookOpen,
   Bot,
+  GraduationCap,
   LayoutDashboard,
   LogOut,
   Megaphone,
@@ -17,6 +18,7 @@ export type NavTab =
   | 'dashboard'
   | 'conversations'
   | 'rules'
+  | 'training'
   | 'campaigns'
   | 'settings'
   | 'guide';
@@ -35,6 +37,7 @@ const NAV_ITEMS: Array<{ id: NavTab; label: string; icon: typeof LayoutDashboard
   { id: 'dashboard', label: 'Painel de Controle', icon: LayoutDashboard },
   { id: 'conversations', label: 'Conversas', icon: MessageSquare },
   { id: 'rules', label: 'Fluxos & Personas IA', icon: SlidersHorizontal },
+  { id: 'training', label: 'Treinamento IA', icon: GraduationCap },
   { id: 'campaigns', label: 'Campanhas & Disparos', icon: Megaphone },
   { id: 'settings', label: 'Configurações IA', icon: Settings },
   { id: 'guide', label: 'Manual & Sobre', icon: BookOpen },

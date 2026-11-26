@@ -1,7 +1,9 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { prisma } from '../db';
 import { emitUserEvent, logActivity } from '../services/activityLog';
 import {
+  analyzeImageWithAi,
   checkAiHealth,
   getUserSettings,
   listAvailableGeminiModels,
@@ -10,6 +12,10 @@ import {
 import { whatsappManager } from '../services/whatsappService';
 
 export const settingsRouter = Router();
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 6 * 1024 * 1024 },
+});
 
 settingsRouter.get('/', async (req, res) => {
   try {
@@ -38,6 +44,9 @@ settingsRouter.put('/', async (req, res) => {
       globalAutomationPaused,
       autoPauseOnManualSend,
       autoSummarizeConversations,
+      enableImageReading,
+      geminiVisionModel,
+      imageAnalysisPrompt,
       defaultMinDelaySec,
       defaultMaxDelaySec,
       defaultBatchSize,
@@ -69,6 +78,15 @@ settingsRouter.put('/', async (req, res) => {
         ...(autoSummarizeConversations !== undefined
           ? { autoSummarizeConversations: Boolean(autoSummarizeConversations) }
           : {}),
+        ...(enableImageReading !== undefined
+          ? { enableImageReading: Boolean(enableImageReading) }
+          : {}),
+        ...(geminiVisionModel !== undefined
+          ? { geminiVisionModel: String(geminiVisionModel).trim() }
+          : {}),
+        ...(imageAnalysisPrompt !== undefined
+          ? { imageAnalysisPrompt: String(imageAnalysisPrompt).trim() }
+          : {}),
         ...(defaultMinDelaySec !== undefined
           ? { defaultMinDelaySec: Math.max(5, Number(defaultMinDelaySec) || 45) }
           : {}),
@@ -94,7 +112,7 @@ settingsRouter.put('/', async (req, res) => {
         updated.aiProvider === 'gemini'
           ? `Gemini ${updated.geminiModel}`
           : `Ollama ${updated.ollamaModel}`
-      }).`,
+      }${updated.enableImageReading ? ' • Leitura de Imagens ATIVA' : ''}).`,
       'INFO'
     );
 
@@ -115,6 +133,30 @@ settingsRouter.post('/test-ai', async (req, res) => {
     res.status(500).json({
       ok: false,
       error: err instanceof Error ? err.message : 'Erro ao testar IA.',
+    });
+  }
+});
+
+settingsRouter.post('/test-vision', upload.single('image'), async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: 'Envie uma imagem para testar.' });
+      return;
+    }
+    const caption = String(req.body?.caption || '').trim() || undefined;
+    const result = await analyzeImageWithAi(
+      userId,
+      req.file.buffer.toString('base64'),
+      req.file.mimetype || 'image/jpeg',
+      caption
+    );
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error:
+        err instanceof Error ? err.message : 'Erro ao analisar imagem de teste.',
     });
   }
 });
