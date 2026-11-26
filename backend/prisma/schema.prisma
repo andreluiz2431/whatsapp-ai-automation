@@ -7,10 +7,52 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  name          String
+  avatarUrl     String?
+  googleSub     String?        @unique
+  passwordHash  String?
+  isOwner       Boolean        @default(false)
+  settings      UserSettings?
+  contacts      Contact[]
+  tags          Tag[]
+  conversations Conversation[]
+  aiRules       AiRule[]
+  campaigns     Campaign[]
+  activityLogs  ActivityLog[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model UserSettings {
+  id                         String    @id @default(cuid())
+  userId                     String    @unique
+  user                       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  aiProvider                 String    @default("gemini") // gemini | ollama
+  geminiApiKey               String    @default("")
+  geminiModel                String    @default("gemini-3.8-flash")
+  ollamaBaseUrl              String    @default("http://localhost:11434")
+  ollamaModel                String    @default("llama3.2")
+  globalAutomationPaused     Boolean   @default(false)
+  autoPauseOnManualSend      Boolean   @default(true)
+  autoSummarizeConversations Boolean   @default(false)
+  defaultMinDelaySec         Int       @default(45)
+  defaultMaxDelaySec         Int       @default(120)
+  defaultBatchSize           Int       @default(20)
+  defaultBatchPauseMin       Int       @default(5)
+  lastDailySummary           String?
+  lastDailySummaryAt         DateTime?
+  updatedAt                  DateTime  @updatedAt
+}
+
 model Contact {
   id            String         @id @default(cuid())
-  phone         String         @unique
-  jid           String         @unique
+  userId        String
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone         String
+  jid           String
   name          String?
   notes         String?
   tags          ContactTag[]
@@ -19,15 +61,24 @@ model Contact {
   campaignItems CampaignItem[]
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
+
+  @@unique([userId, phone])
+  @@unique([userId, jid])
+  @@index([userId])
 }
 
 model Tag {
   id        String       @id @default(cuid())
-  name      String       @unique
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
   color     String       @default("#10b981")
   contacts  ContactTag[]
   aiRules   AiRule[]
   createdAt DateTime     @default(now())
+
+  @@unique([userId, name])
+  @@index([userId])
 }
 
 model ContactTag {
@@ -41,6 +92,8 @@ model ContactTag {
 
 model Conversation {
   id                 String    @id @default(cuid())
+  userId             String
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   contactId          String    @unique
   contact            Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
   mode               String    @default("AUTO") // AUTO | MANUAL
@@ -54,24 +107,29 @@ model Conversation {
   messages           Message[]
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
+
+  @@index([userId, lastMessageAt])
 }
 
 model Message {
   id             String       @id @default(cuid())
   conversationId String
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  waMessageId    String?      @unique
+  waMessageId    String?
   direction      String       // INBOUND | OUTBOUND
   senderType     String       // CONTACT | AI | HUMAN | CAMPAIGN
   body           String
   status         String       @default("SENT") // PENDING | SENT | DELIVERED | READ | FAILED
   createdAt      DateTime     @default(now())
 
+  @@unique([conversationId, waMessageId])
   @@index([conversationId, createdAt])
 }
 
 model AiRule {
   id                    String         @id @default(cuid())
+  userId                String
+  user                  User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   name                  String
   scope                 String         // GLOBAL | TAG | CONTACT
   isActive              Boolean        @default(true)
@@ -88,11 +146,13 @@ model AiRule {
   createdAt             DateTime       @default(now())
   updatedAt             DateTime       @updatedAt
 
-  @@index([scope, isActive])
+  @@index([userId, scope, isActive])
 }
 
 model Campaign {
   id                  String         @id @default(cuid())
+  userId              String
+  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   name                String
   messageTemplate     String
   useAiVariation      Boolean        @default(false)
@@ -112,6 +172,8 @@ model Campaign {
   items               CampaignItem[]
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
+
+  @@index([userId, createdAt])
 }
 
 model CampaignItem {
@@ -133,30 +195,13 @@ model CampaignItem {
 
 model ActivityLog {
   id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   level     String   @default("INFO") // INFO | SUCCESS | WARN | ERROR
   category  String   // WHATSAPP | AI | CAMPAIGN | SYSTEM
   message   String
   metadata  String?
   createdAt DateTime @default(now())
 
-  @@index([createdAt])
-}
-
-model AppSettings {
-  id                         Int       @id @default(1)
-  aiProvider                 String    @default("gemini") // gemini | ollama
-  geminiApiKey               String    @default("")
-  geminiModel                String    @default("gemini-3.8-flash")
-  ollamaBaseUrl              String    @default("http://localhost:11434")
-  ollamaModel                String    @default("llama3.2")
-  globalAutomationPaused     Boolean   @default(false)
-  autoPauseOnManualSend      Boolean   @default(true)
-  autoSummarizeConversations Boolean   @default(false)
-  defaultMinDelaySec         Int       @default(45)
-  defaultMaxDelaySec         Int       @default(120)
-  defaultBatchSize           Int       @default(20)
-  defaultBatchPauseMin       Int       @default(5)
-  lastDailySummary           String?
-  lastDailySummaryAt         DateTime?
-  updatedAt                  DateTime  @updatedAt
+  @@index([userId, createdAt])
 }

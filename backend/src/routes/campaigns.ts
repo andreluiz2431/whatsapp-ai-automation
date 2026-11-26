@@ -1,11 +1,14 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { prisma } from '../db';
-import { campaignQueue } from '../services/campaignQueue';
+import { campaignQueueManager } from '../services/campaignQueue';
 import { normalizePhoneAndJid } from '../services/whatsappService';
 
 export const campaignsRouter = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
 
 interface ParsedRecipient {
   name: string;
@@ -22,7 +25,9 @@ function parseRawContactsText(raw: string): ParsedRecipient[] {
   const recipients: ParsedRecipient[] = [];
 
   for (const line of lines) {
-    const parts = line.split(/[,;\t]/).map((p) => p.replace(/^["']|["']$/g, '').trim());
+    const parts = line
+      .split(/[,;\t]/)
+      .map((p) => p.replace(/^["']|["']$/g, '').trim());
     if (parts.length === 0) continue;
 
     let name = '';
@@ -32,7 +37,6 @@ function parseRawContactsText(raw: string): ParsedRecipient[] {
       rawPhone = parts[0];
       name = 'Contato';
     } else {
-      // Detecta qual coluna contém o número de telefone
       const digits0 = parts[0].replace(/\D/g, '');
       const digits1 = parts[1].replace(/\D/g, '');
       if (digits1.length >= 8) {
@@ -42,7 +46,6 @@ function parseRawContactsText(raw: string): ParsedRecipient[] {
         rawPhone = parts[0];
         name = parts[1] || 'Contato';
       } else {
-        // Provável linha de cabeçalho ("Nome, Telefone")
         continue;
       }
     }
@@ -63,9 +66,11 @@ function parseRawContactsText(raw: string): ParsedRecipient[] {
   return recipients;
 }
 
-campaignsRouter.get('/', async (_req, res) => {
+campaignsRouter.get('/', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const campaigns = await prisma.campaign.findMany({
+      where: { userId },
       orderBy: { createdAt: 'desc' },
       include: {
         aiRule: { select: { id: true, name: true, scope: true } },
@@ -75,7 +80,7 @@ campaignsRouter.get('/', async (_req, res) => {
 
     res.json({
       campaigns,
-      runtime: campaignQueue.getRuntimeState(),
+      runtime: campaignQueueManager.getRunner(userId).getRuntimeState(),
     });
   } catch (err) {
     res.status(500).json({
@@ -86,8 +91,9 @@ campaignsRouter.get('/', async (_req, res) => {
 
 campaignsRouter.get('/:id', async (req, res) => {
   try {
-    const campaign = await prisma.campaign.findUnique({
-      where: { id: req.params.id },
+    const userId = req.user!.id;
+    const campaign = await prisma.campaign.findFirst({
+      where: { id: req.params.id, userId },
       include: {
         aiRule: true,
         items: { orderBy: { createdAt: 'asc' } },
@@ -122,6 +128,7 @@ campaignsRouter.post('/parse-contacts', upload.single('file'), (req, res) => {
 
 campaignsRouter.post('/', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const {
       name,
       messageTemplate,
@@ -155,6 +162,16 @@ campaignsRouter.post('/', async (req, res) => {
       return;
     }
 
+    if (aiRuleId) {
+      const ownedRule = await prisma.aiRule.findFirst({
+        where: { id: aiRuleId, userId },
+      });
+      if (!ownedRule) {
+        res.status(400).json({ error: 'Regra de IA inválida.' });
+        return;
+      }
+    }
+
     const cleanRecipients: ParsedRecipient[] = [];
     const seen = new Set<string>();
     for (const r of recipients) {
@@ -181,6 +198,7 @@ campaignsRouter.post('/', async (req, res) => {
 
     const campaign = await prisma.campaign.create({
       data: {
+        userId,
         name: name.trim(),
         messageTemplate: messageTemplate.trim(),
         useAiVariation: Boolean(useAiVariation),
@@ -206,7 +224,7 @@ campaignsRouter.post('/', async (req, res) => {
     });
 
     if (startImmediately) {
-      await campaignQueue.startCampaign(campaign.id);
+      await campaignQueueManager.getRunner(userId).startCampaign(campaign.id);
     }
 
     res.status(201).json(campaign);
@@ -219,8 +237,10 @@ campaignsRouter.post('/', async (req, res) => {
 
 campaignsRouter.post('/:id/start', async (req, res) => {
   try {
-    await campaignQueue.startCampaign(req.params.id);
-    res.json({ ok: true, runtime: campaignQueue.getRuntimeState() });
+    const userId = req.user!.id;
+    const runner = campaignQueueManager.getRunner(userId);
+    await runner.startCampaign(req.params.id);
+    res.json({ ok: true, runtime: runner.getRuntimeState() });
   } catch (err) {
     res.status(400).json({
       error: err instanceof Error ? err.message : 'Erro ao iniciar campanha.',
@@ -230,8 +250,10 @@ campaignsRouter.post('/:id/start', async (req, res) => {
 
 campaignsRouter.post('/:id/pause', async (req, res) => {
   try {
-    await campaignQueue.pauseCampaign(req.params.id);
-    res.json({ ok: true, runtime: campaignQueue.getRuntimeState() });
+    const userId = req.user!.id;
+    const runner = campaignQueueManager.getRunner(userId);
+    await runner.pauseCampaign(req.params.id);
+    res.json({ ok: true, runtime: runner.getRuntimeState() });
   } catch (err) {
     res.status(500).json({
       error: err instanceof Error ? err.message : 'Erro ao pausar campanha.',
@@ -241,8 +263,10 @@ campaignsRouter.post('/:id/pause', async (req, res) => {
 
 campaignsRouter.post('/:id/cancel', async (req, res) => {
   try {
-    await campaignQueue.cancelCampaign(req.params.id);
-    res.json({ ok: true, runtime: campaignQueue.getRuntimeState() });
+    const userId = req.user!.id;
+    const runner = campaignQueueManager.getRunner(userId);
+    await runner.cancelCampaign(req.params.id);
+    res.json({ ok: true, runtime: runner.getRuntimeState() });
   } catch (err) {
     res.status(500).json({
       error: err instanceof Error ? err.message : 'Erro ao cancelar campanha.',
@@ -252,10 +276,15 @@ campaignsRouter.post('/:id/cancel', async (req, res) => {
 
 campaignsRouter.delete('/:id', async (req, res) => {
   try {
-    const campaign = await prisma.campaign.findUnique({
-      where: { id: req.params.id },
+    const userId = req.user!.id;
+    const campaign = await prisma.campaign.findFirst({
+      where: { id: req.params.id, userId },
     });
-    if (campaign?.status === 'RUNNING') {
+    if (!campaign) {
+      res.status(404).json({ error: 'Campanha não encontrada.' });
+      return;
+    }
+    if (campaign.status === 'RUNNING') {
       res.status(400).json({
         error: 'Pause ou cancele a campanha antes de excluí-la.',
       });

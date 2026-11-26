@@ -4,6 +4,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isFormData = init?.body instanceof FormData;
   const res = await fetch(`${BASE}${path}`, {
     ...init,
+    credentials: 'include',
     headers: isFormData
       ? init?.headers
       : {

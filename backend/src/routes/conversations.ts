@@ -1,20 +1,22 @@
 import { Router } from 'express';
 import { prisma } from '../db';
-import { emitSocketEvent, logActivity } from '../services/activityLog';
+import { emitUserEvent, logActivity } from '../services/activityLog';
 import {
   generateConversationSummary,
   resolveRuleForContact,
 } from '../services/aiService';
 import {
   normalizePhoneAndJid,
-  whatsappService,
+  whatsappManager,
 } from '../services/whatsappService';
 
 export const conversationsRouter = Router();
 
-conversationsRouter.get('/', async (_req, res) => {
+conversationsRouter.get('/', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const conversations = await prisma.conversation.findMany({
+      where: { userId },
       orderBy: { lastMessageAt: 'desc' },
       include: {
         contact: {
@@ -29,6 +31,7 @@ conversationsRouter.get('/', async (_req, res) => {
     const enriched = await Promise.all(
       conversations.map(async (conv) => {
         const resolved = await resolveRuleForContact(
+          userId,
           conv.contactId,
           conv.activeRuleId
         );
@@ -56,6 +59,7 @@ conversationsRouter.get('/', async (_req, res) => {
 
 conversationsRouter.post('/start', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const { phone: rawPhone, name, message } = req.body as {
       phone?: string;
       name?: string;
@@ -69,15 +73,16 @@ conversationsRouter.post('/start', async (req, res) => {
 
     const { phone, jid } = normalizePhoneAndJid(rawPhone);
     const contact = await prisma.contact.upsert({
-      where: { jid },
+      where: { userId_jid: { userId, jid } },
       update: name ? { name: name.trim() } : {},
-      create: { phone, jid, name: name?.trim() || null },
+      create: { userId, phone, jid, name: name?.trim() || null },
     });
 
     const conversation = await prisma.conversation.upsert({
       where: { contactId: contact.id },
       update: {},
       create: {
+        userId,
         contactId: contact.id,
         mode: 'MANUAL',
         lastMessageAt: new Date(),
@@ -89,10 +94,12 @@ conversationsRouter.post('/start', async (req, res) => {
     });
 
     if (message && message.trim()) {
-      await whatsappService.sendManualMessage(conversation.id, message.trim());
+      await whatsappManager
+        .getSession(userId)
+        .sendManualMessage(conversation.id, message.trim());
     }
 
-    emitSocketEvent('conversation:updated', conversation);
+    emitUserEvent(userId, 'conversation:updated', conversation);
     res.status(201).json(conversation);
   } catch (err) {
     res.status(500).json({
@@ -103,7 +110,16 @@ conversationsRouter.post('/start', async (req, res) => {
 
 conversationsRouter.get('/:id/messages', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const { id } = req.params;
+    const conv = await prisma.conversation.findFirst({
+      where: { id, userId },
+    });
+    if (!conv) {
+      res.status(404).json({ error: 'Conversa não encontrada.' });
+      return;
+    }
+
     const messages = await prisma.message.findMany({
       where: { conversationId: id },
       orderBy: { createdAt: 'asc' },
@@ -125,6 +141,7 @@ conversationsRouter.get('/:id/messages', async (req, res) => {
 
 conversationsRouter.post('/:id/send', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const { id } = req.params;
     const body = String(req.body?.body || '').trim();
     if (!body) {
@@ -132,7 +149,9 @@ conversationsRouter.post('/:id/send', async (req, res) => {
       return;
     }
 
-    const result = await whatsappService.sendManualMessage(id, body);
+    const result = await whatsappManager
+      .getSession(userId)
+      .sendManualMessage(id, body);
     res.json(result);
   } catch (err) {
     res.status(500).json({
@@ -143,10 +162,29 @@ conversationsRouter.post('/:id/send', async (req, res) => {
 
 conversationsRouter.patch('/:id/mode', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const { id } = req.params;
+    const existing = await prisma.conversation.findFirst({
+      where: { id, userId },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Conversa não encontrada.' });
+      return;
+    }
+
     const mode = req.body?.mode === 'MANUAL' ? 'MANUAL' : 'AUTO';
     const activeRuleId =
       req.body?.activeRuleId !== undefined ? req.body.activeRuleId : undefined;
+
+    if (activeRuleId) {
+      const rule = await prisma.aiRule.findFirst({
+        where: { id: activeRuleId, userId },
+      });
+      if (!rule) {
+        res.status(400).json({ error: 'Regra de IA inválida.' });
+        return;
+      }
+    }
 
     const updated = await prisma.conversation.update({
       where: { id },
@@ -161,6 +199,7 @@ conversationsRouter.patch('/:id/mode', async (req, res) => {
     });
 
     const resolved = await resolveRuleForContact(
+      userId,
       updated.contactId,
       updated.activeRuleId
     );
@@ -176,8 +215,9 @@ conversationsRouter.patch('/:id/mode', async (req, res) => {
         : null,
     };
 
-    emitSocketEvent('conversation:updated', enriched);
+    emitUserEvent(userId, 'conversation:updated', enriched);
     await logActivity(
+      userId,
       'SYSTEM',
       `Conversa com ${updated.contact.name || updated.contact.phone} alterada para modo ${
         mode === 'AUTO' ? 'Automático (IA)' : 'Manual (Humano)'
@@ -195,8 +235,9 @@ conversationsRouter.patch('/:id/mode', async (req, res) => {
 
 conversationsRouter.post('/:id/summary', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const { id } = req.params;
-    const summary = await generateConversationSummary(id);
+    const summary = await generateConversationSummary(userId, id);
     res.json({ summary, updatedAt: new Date().toISOString() });
   } catch (err) {
     res.status(500).json({
@@ -210,6 +251,7 @@ conversationsRouter.post('/:id/summary', async (req, res) => {
 
 conversationsRouter.patch('/:id/contact', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const { id } = req.params;
     const { name, notes, tagIds } = req.body as {
       name?: string;
@@ -217,7 +259,9 @@ conversationsRouter.patch('/:id/contact', async (req, res) => {
       tagIds?: string[];
     };
 
-    const conv = await prisma.conversation.findUnique({ where: { id } });
+    const conv = await prisma.conversation.findFirst({
+      where: { id, userId },
+    });
     if (!conv) {
       res.status(404).json({ error: 'Conversa não encontrada.' });
       return;
@@ -232,12 +276,16 @@ conversationsRouter.patch('/:id/contact', async (req, res) => {
     });
 
     if (Array.isArray(tagIds)) {
+      const validTags = await prisma.tag.findMany({
+        where: { id: { in: tagIds }, userId },
+        select: { id: true },
+      });
       await prisma.contactTag.deleteMany({
         where: { contactId: conv.contactId },
       });
-      for (const tagId of tagIds) {
+      for (const t of validTags) {
         await prisma.contactTag.create({
-          data: { contactId: conv.contactId, tagId },
+          data: { contactId: conv.contactId, tagId: t.id },
         });
       }
     }
@@ -252,6 +300,7 @@ conversationsRouter.patch('/:id/contact', async (req, res) => {
 
     if (updated) {
       const resolved = await resolveRuleForContact(
+        userId,
         updated.contactId,
         updated.activeRuleId
       );
@@ -266,7 +315,7 @@ conversationsRouter.patch('/:id/contact', async (req, res) => {
             }
           : null,
       };
-      emitSocketEvent('conversation:updated', enriched);
+      emitUserEvent(userId, 'conversation:updated', enriched);
       res.json(enriched);
       return;
     }

@@ -1,3 +1,11 @@
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  avatarUrl: string | null;
+  isOwner: boolean;
+}
+
 export type WhatsAppStatus =
   | 'DISCONNECTED'
   | 'AWAITING_QR'
@@ -151,7 +159,8 @@ export interface Campaign {
 }
 
 export interface AppSettings {
-  id: number;
+  id: string;
+  userId?: string;
   aiProvider: 'gemini' | 'ollama';
   geminiApiKey: string;
   geminiModel: string;

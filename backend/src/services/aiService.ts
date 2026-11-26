@@ -1,6 +1,6 @@
-import { AiRule, AppSettings } from '@prisma/client';
+import { AiRule, UserSettings } from '@prisma/client';
 import { config } from '../config';
-import { prisma } from '../db';
+import { ensureUserDefaults, prisma } from '../db';
 import { logActivity } from './activityLog';
 
 interface ChatTurn {
@@ -29,45 +29,47 @@ export interface AiHealthStatus {
 
 const TRANSFER_TOKEN = '[TRANSFERIR_HUMANO]';
 
-export async function getEffectiveSettings(): Promise<AppSettings> {
-  const settings = await prisma.appSettings.findUnique({ where: { id: 1 } });
+export async function getUserSettings(userId: string): Promise<UserSettings> {
+  let settings = await prisma.userSettings.findUnique({ where: { userId } });
   if (!settings) {
-    throw new Error('Configurações do sistema não inicializadas.');
+    await ensureUserDefaults(userId, false);
+    settings = await prisma.userSettings.findUnique({ where: { userId } });
+  }
+  if (!settings) {
+    throw new Error('Configurações do usuário não encontradas.');
   }
   return settings;
 }
 
 /**
- * Resolve a regra de IA seguindo a hierarquia estrita:
+ * Resolve a regra de IA do usuário seguindo a hierarquia:
  * 1. Individual (contato específico)
  * 2. Fluxo específico atribuído à conversa (ex: via campanha)
  * 3. Grupo / Tag do contato
  * 4. Global (padrão)
  */
 export async function resolveRuleForContact(
+  userId: string,
   contactId: string,
   assignedRuleId?: string | null
 ): Promise<ResolvedRuleResult> {
-  // 1. Individual (por contato específico)
   const contactRule = await prisma.aiRule.findFirst({
-    where: { scope: 'CONTACT', contactId, isActive: true },
+    where: { userId, scope: 'CONTACT', contactId, isActive: true },
     orderBy: { updatedAt: 'desc' },
   });
   if (contactRule) {
     return { rule: contactRule, levelLabel: 'Individual' };
   }
 
-  // 2. Fluxo específico vinculado à conversa (ex: disparo de campanha)
   if (assignedRuleId) {
     const campaignRule = await prisma.aiRule.findFirst({
-      where: { id: assignedRuleId, isActive: true },
+      where: { id: assignedRuleId, userId, isActive: true },
     });
     if (campaignRule) {
       return { rule: campaignRule, levelLabel: 'Campanha' };
     }
   }
 
-  // 3. Por Grupo/Tag do contato
   const contactTags = await prisma.contactTag.findMany({
     where: { contactId },
     select: { tagId: true },
@@ -75,7 +77,7 @@ export async function resolveRuleForContact(
   if (contactTags.length > 0) {
     const tagIds = contactTags.map((t) => t.tagId);
     const tagRule = await prisma.aiRule.findFirst({
-      where: { scope: 'TAG', tagId: { in: tagIds }, isActive: true },
+      where: { userId, scope: 'TAG', tagId: { in: tagIds }, isActive: true },
       orderBy: { updatedAt: 'desc' },
     });
     if (tagRule) {
@@ -83,9 +85,8 @@ export async function resolveRuleForContact(
     }
   }
 
-  // 4. Global (Padrão)
   const globalRule = await prisma.aiRule.findFirst({
-    where: { scope: 'GLOBAL', isActive: true },
+    where: { userId, scope: 'GLOBAL', isActive: true },
     orderBy: { updatedAt: 'desc' },
   });
   if (globalRule) {
@@ -140,9 +141,9 @@ async function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function listAvailableGeminiModels(): Promise<string[]> {
-  const settings = await getEffectiveSettings();
-  const apiKey = settings.geminiApiKey || config.geminiApiKey;
+export async function listAvailableGeminiModels(userId: string): Promise<string[]> {
+  const settings = await getUserSettings(userId);
+  const apiKey = settings.geminiApiKey;
   if (!apiKey) return [];
 
   try {
@@ -223,6 +224,7 @@ async function callGeminiSingleModel(
 }
 
 async function callGemini(
+  userId: string,
   apiKey: string,
   model: string,
   systemPrompt: string,
@@ -230,11 +232,10 @@ async function callGemini(
 ): Promise<string> {
   if (!apiKey) {
     throw new Error(
-      'GEMINI_API_KEY não configurada. Adicione sua chave gratuita do Google AI Studio em Configurações ou no .env.'
+      'GEMINI_API_KEY não configurada na sua conta. Adicione sua chave gratuita do Google AI Studio em Configurações IA.'
     );
   }
 
-  // Gemini espera alternância / pelo menos 1 turno user
   const contents = turns.map((t) => ({
     role: t.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: t.content }],
@@ -244,7 +245,6 @@ async function callGemini(
     contents.push({ role: 'user', parts: [{ text: 'Olá' }] });
   }
 
-  // 1. Tenta o modelo principal com retry exponencial em caso de 503/429 (pico temporário de demanda)
   let lastError = '';
   let lastStatus = 0;
 
@@ -261,14 +261,12 @@ async function callGemini(
         continue;
       }
     } else {
-      // Erro 400/401/403/404: não adianta repetir o mesmo modelo
       break;
     }
   }
 
-  // 2. Fallback automático em caso de 503/429/404: busca outros modelos flash/lite disponíveis na conta
   if (lastStatus === 503 || lastStatus === 429 || lastStatus === 404) {
-    const available = await listAvailableGeminiModels();
+    const available = await listAvailableGeminiModels(userId);
     const fallbacks = available
       .filter(
         (m) =>
@@ -289,6 +287,7 @@ async function callGemini(
       );
       if (res.ok) {
         await logActivity(
+          userId,
           'AI',
           `Modelo principal "${model}" indisponível (${lastStatus}); resposta gerada via fallback "${fallbackModel}".`,
           'WARN'
@@ -346,11 +345,12 @@ async function callOllama(
 }
 
 async function invokeProvider(
+  userId: string,
   systemPrompt: string,
   turns: ChatTurn[]
 ): Promise<string> {
-  const settings = await getEffectiveSettings();
-  const provider = settings.aiProvider || config.aiProvider;
+  const settings = await getUserSettings(userId);
+  const provider = settings.aiProvider || 'gemini';
 
   if (provider === 'ollama') {
     const baseUrl = settings.ollamaBaseUrl || config.ollamaBaseUrl;
@@ -358,16 +358,17 @@ async function invokeProvider(
     return callOllama(baseUrl, model, systemPrompt, turns);
   }
 
-  const apiKey = settings.geminiApiKey || config.geminiApiKey;
+  const apiKey = settings.geminiApiKey;
   const model = settings.geminiModel || config.geminiModel;
-  return callGemini(apiKey, model, systemPrompt, turns);
+  return callGemini(userId, apiKey, model, systemPrompt, turns);
 }
 
 export async function generateConversationReply(
+  userId: string,
   conversationId: string
 ): Promise<AiReplyResult> {
-  const conversation = await prisma.conversation.findUnique({
-    where: { id: conversationId },
+  const conversation = await prisma.conversation.findFirst({
+    where: { id: conversationId, userId },
     include: {
       contact: true,
       messages: {
@@ -382,13 +383,13 @@ export async function generateConversationReply(
   }
 
   const { rule, levelLabel } = await resolveRuleForContact(
+    userId,
     conversation.contactId,
     conversation.activeRuleId
   );
 
   const systemPrompt = buildSystemPrompt(rule, conversation.contact.name);
 
-  // Ordena cronologicamente e mescla mensagens consecutivas do mesmo papel
   const ordered = [...conversation.messages].reverse();
   const turns: ChatTurn[] = [];
   for (const msg of ordered) {
@@ -402,7 +403,7 @@ export async function generateConversationReply(
     }
   }
 
-  const rawText = await invokeProvider(systemPrompt, turns);
+  const rawText = await invokeProvider(userId, systemPrompt, turns);
   const shouldTransferToHuman = rawText.includes(TRANSFER_TOKEN);
   const cleanText = rawText.replace(TRANSFER_TOKEN, '').trim();
 
@@ -417,10 +418,11 @@ export async function generateConversationReply(
 }
 
 export async function generateConversationSummary(
+  userId: string,
   conversationId: string
 ): Promise<string> {
-  const conversation = await prisma.conversation.findUnique({
-    where: { id: conversationId },
+  const conversation = await prisma.conversation.findFirst({
+    where: { id: conversationId, userId },
     include: {
       contact: true,
       messages: {
@@ -455,7 +457,7 @@ export async function generateConversationSummary(
   const systemPrompt =
     'Você é um analista de atendimento executivo. Gere um resumo objetivo em português com: 1) Assunto/Interesse principal, 2) Status atual da conversa, 3) Próximo passo recomendado. Máximo de 4 frases ou tópicos curtos.';
 
-  const summary = await invokeProvider(systemPrompt, [
+  const summary = await invokeProvider(userId, systemPrompt, [
     { role: 'user', content: `Resuma esta conversa de WhatsApp:\n\n${transcript}` },
   ]);
 
@@ -468,6 +470,7 @@ export async function generateConversationSummary(
   });
 
   await logActivity(
+    userId,
     'AI',
     `Resumo gerado por IA para ${conversation.contact.name || conversation.contact.phone}`,
     'INFO'
@@ -476,31 +479,42 @@ export async function generateConversationSummary(
   return summary;
 }
 
-export async function generateDailyExecutiveSummary(): Promise<string> {
+export async function generateDailyExecutiveSummary(
+  userId: string
+): Promise<string> {
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
 
   const [todayMessages, activeConversations, campaigns] = await Promise.all([
     prisma.message.findMany({
-      where: { createdAt: { gte: startOfDay } },
+      where: {
+        createdAt: { gte: startOfDay },
+        conversation: { userId },
+      },
       include: { conversation: { include: { contact: true } } },
       orderBy: { createdAt: 'desc' },
       take: 120,
     }),
     prisma.conversation.count({
-      where: { lastMessageAt: { gte: startOfDay } },
+      where: { userId, lastMessageAt: { gte: startOfDay } },
     }),
     prisma.campaign.findMany({
-      where: { updatedAt: { gte: startOfDay } },
-      select: { name: true, status: true, sentCount: true, failedCount: true, totalCount: true },
+      where: { userId, updatedAt: { gte: startOfDay } },
+      select: {
+        name: true,
+        status: true,
+        sentCount: true,
+        failedCount: true,
+        totalCount: true,
+      },
     }),
   ]);
 
   if (todayMessages.length === 0 && campaigns.length === 0) {
     const emptySummary =
       'Nenhuma mensagem ou campanha registrada hoje até o momento.';
-    await prisma.appSettings.update({
-      where: { id: 1 },
+    await prisma.userSettings.update({
+      where: { userId },
       data: { lastDailySummary: emptySummary, lastDailySummaryAt: new Date() },
     });
     return emptySummary;
@@ -541,26 +555,27 @@ export async function generateDailyExecutiveSummary(): Promise<string> {
   const systemPrompt =
     'Você é um gerente de operações de atendimento. Gere um Resumo Executivo do Dia em português do Brasil claro e estruturado com tópicos: Visão Geral, Principais Temas dos Clientes, Desempenho da IA/Campanhas e Alertas/Recomendações.';
 
-  const summary = await invokeProvider(systemPrompt, [
+  const summary = await invokeProvider(userId, systemPrompt, [
     {
       role: 'user',
       content: `Dados do dia:\n${statsText}\n\nAmostra recente das conversas:\n${sampleTranscript}`,
     },
   ]);
 
-  await prisma.appSettings.update({
-    where: { id: 1 },
+  await prisma.userSettings.update({
+    where: { userId },
     data: {
       lastDailySummary: summary,
       lastDailySummaryAt: new Date(),
     },
   });
 
-  await logActivity('AI', 'Resumo executivo diário gerado pela IA.', 'SUCCESS');
+  await logActivity(userId, 'AI', 'Resumo executivo diário gerado pela IA.', 'SUCCESS');
   return summary;
 }
 
 export async function generateMessageVariation(
+  userId: string,
   renderedTemplate: string,
   contactName: string
 ): Promise<string> {
@@ -568,7 +583,7 @@ export async function generateMessageVariation(
     const systemPrompt =
       'Você reescreve mensagens curtas de WhatsApp criando pequenas variações naturais na saudação e na fraseologia para evitar textos idênticos em massa. Mantenha 100% do sentido original, o nome do contato e qualquer link/informação importante. Retorne APENAS a mensagem final, sem aspas nem explicações.';
 
-    const varied = await invokeProvider(systemPrompt, [
+    const varied = await invokeProvider(userId, systemPrompt, [
       {
         role: 'user',
         content: `Crie uma variação natural e humana desta mensagem para ${contactName}:\n\n${renderedTemplate}`,
@@ -577,16 +592,13 @@ export async function generateMessageVariation(
 
     return varied || renderedTemplate;
   } catch {
-    // Fallback seguro para nunca travar campanha se a IA estiver indisponível
     return renderedTemplate;
   }
 }
 
-export async function checkAiHealth(): Promise<AiHealthStatus> {
-  const settings = await getEffectiveSettings();
-  const provider = (settings.aiProvider || config.aiProvider) as
-    | 'gemini'
-    | 'ollama';
+export async function checkAiHealth(userId: string): Promise<AiHealthStatus> {
+  const settings = await getUserSettings(userId);
+  const provider = (settings.aiProvider || 'gemini') as 'gemini' | 'ollama';
 
   if (provider === 'ollama') {
     const baseUrl = (settings.ollamaBaseUrl || config.ollamaBaseUrl).replace(
@@ -637,7 +649,7 @@ export async function checkAiHealth(): Promise<AiHealthStatus> {
     }
   }
 
-  const apiKey = settings.geminiApiKey || config.geminiApiKey;
+  const apiKey = settings.geminiApiKey;
   const model = settings.geminiModel || config.geminiModel;
 
   if (!apiKey) {
@@ -646,7 +658,7 @@ export async function checkAiHealth(): Promise<AiHealthStatus> {
       model,
       ready: false,
       details:
-        'Chave GEMINI_API_KEY não configurada (configure em Configurações ou .env).',
+        'Configure sua própria chave GEMINI_API_KEY em Configurações IA.',
     };
   }
 
@@ -654,17 +666,18 @@ export async function checkAiHealth(): Promise<AiHealthStatus> {
     provider: 'gemini',
     model,
     ready: true,
-    details: 'Google Gemini API (Free Tier) configurado e pronto.',
+    details: 'Google Gemini API (Free Tier) configurado na sua conta.',
   };
 }
 
-export async function testAiConnection(): Promise<{
+export async function testAiConnection(userId: string): Promise<{
   ok: boolean;
   reply?: string;
   error?: string;
 }> {
   try {
     const reply = await invokeProvider(
+      userId,
       'Responda de forma muito curta em português confirmando que o motor de IA está ativo.',
       [{ role: 'user', content: 'Teste de conexão. Tudo funcionando?' }]
     );

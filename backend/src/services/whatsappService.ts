@@ -8,12 +8,13 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import fs from 'fs';
+import path from 'path';
 import pino from 'pino';
 import QRCode from 'qrcode';
 import { config } from '../config';
 import { prisma } from '../db';
 import { WhatsAppConnectionStatus, WhatsAppStatePayload } from '../types';
-import { emitSocketEvent, logActivity } from './activityLog';
+import { emitUserEvent, logActivity } from './activityLog';
 import {
   generateConversationReply,
   generateConversationSummary,
@@ -37,7 +38,6 @@ export function normalizePhoneAndJid(raw: string): {
   if (digits.startsWith('00')) {
     digits = digits.slice(2);
   }
-  // Heurística amigável para Brasil: 10 ou 11 dígitos sem DDI -> prefixa 55
   if ((digits.length === 10 || digits.length === 11) && !digits.startsWith('55')) {
     digits = `55${digits}`;
   }
@@ -61,7 +61,9 @@ function extractTextFromMessage(msg: proto.IMessage | null | undefined): string 
   return '';
 }
 
-class WhatsAppService {
+class UserWhatsAppSession {
+  private readonly userId: string;
+  private readonly sessionPath: string;
   private sock: WASocket | null = null;
   private status: WhatsAppConnectionStatus = 'DISCONNECTED';
   private connectedPhone: string | null = null;
@@ -75,11 +77,16 @@ class WhatsAppService {
   private campaignRunning = false;
   private pendingAiTimers = new Map<string, NodeJS.Timeout>();
 
+  constructor(userId: string) {
+    this.userId = userId;
+    this.sessionPath = path.join(config.sessionDir, userId);
+  }
+
   public hasSavedSession(): boolean {
     try {
       return (
-        fs.existsSync(config.sessionDir) &&
-        fs.existsSync(`${config.sessionDir}/creds.json`)
+        fs.existsSync(this.sessionPath) &&
+        fs.existsSync(path.join(this.sessionPath, 'creds.json'))
       );
     } catch {
       return false;
@@ -96,7 +103,9 @@ class WhatsAppService {
   }
 
   public async getState(): Promise<WhatsAppStatePayload> {
-    const settings = await prisma.appSettings.findUnique({ where: { id: 1 } });
+    const settings = await prisma.userSettings.findUnique({
+      where: { userId: this.userId },
+    });
     const effectiveStatus: WhatsAppConnectionStatus =
       this.status === 'CONNECTED' && this.campaignRunning
         ? 'CAMPAIGN_RUNNING'
@@ -115,18 +124,7 @@ class WhatsAppService {
 
   public async broadcastStatus(): Promise<void> {
     const state = await this.getState();
-    emitSocketEvent('whatsapp:status', state);
-  }
-
-  public async autoConnectIfSessionExists(): Promise<void> {
-    if (this.hasSavedSession()) {
-      await logActivity(
-        'WHATSAPP',
-        'Sessão local detectada. Restaurando conexão com o WhatsApp...',
-        'INFO'
-      );
-      await this.connect();
-    }
+    emitUserEvent(this.userId, 'whatsapp:status', state);
   }
 
   public async connect(): Promise<void> {
@@ -144,15 +142,15 @@ class WhatsAppService {
     this.lastError = null;
 
     try {
-      fs.mkdirSync(config.sessionDir, { recursive: true });
-      const { state, saveCreds } = await useMultiFileAuthState(config.sessionDir);
+      fs.mkdirSync(this.sessionPath, { recursive: true });
+      const { state, saveCreds } = await useMultiFileAuthState(this.sessionPath);
 
       let version: [number, number, number] = [2, 3000, 1023223821];
       try {
         const latest = await fetchLatestBaileysVersion();
         version = latest.version;
       } catch {
-        // Fallback para versão conhecida caso sem acesso à verificação remota
+        // Fallback seguro
       }
 
       const sock = makeWASocket({
@@ -179,9 +177,12 @@ class WhatsAppService {
             width: 300,
             margin: 2,
           });
-          emitSocketEvent('whatsapp:qr', { qrDataUrl: this.qrDataUrl });
+          emitUserEvent(this.userId, 'whatsapp:qr', {
+            qrDataUrl: this.qrDataUrl,
+          });
           await this.broadcastStatus();
           await logActivity(
+            this.userId,
             'WHATSAPP',
             'Novo QR Code gerado. Escaneie no WhatsApp em "Dispositivos Conectados".',
             'INFO'
@@ -198,9 +199,10 @@ class WhatsAppService {
           this.connectedPhone = rawId.split(':')[0]?.split('@')[0] || null;
           this.connectedName = sock.user?.name || 'Dispositivo Conectado';
 
-          emitSocketEvent('whatsapp:qr', { qrDataUrl: null });
+          emitUserEvent(this.userId, 'whatsapp:qr', { qrDataUrl: null });
           await this.broadcastStatus();
           await logActivity(
+            this.userId,
             'WHATSAPP',
             `WhatsApp conectado com sucesso (${this.connectedPhone || 'ativo'}).`,
             'SUCCESS'
@@ -225,20 +227,20 @@ class WhatsAppService {
               'Sessão desconectada pelo celular. Limpe a sessão e escaneie um novo QR Code.';
             this.shouldReconnect = false;
             await this.clearSessionFiles();
-            await logActivity('WHATSAPP', this.lastError, 'WARN');
+            await logActivity(this.userId, 'WHATSAPP', this.lastError, 'WARN');
           } else if (this.shouldReconnect) {
             this.reconnectAttempts += 1;
             const delayMs = Math.min(3000 * this.reconnectAttempts, 30000);
             this.lastError = `Conexão interrompida (código ${statusCode ?? 'desconhecido'}). Reconectando em ${Math.round(
               delayMs / 1000
             )}s...`;
-            await logActivity('WHATSAPP', this.lastError, 'WARN');
+            await logActivity(this.userId, 'WHATSAPP', this.lastError, 'WARN');
 
             this.reconnectTimer = setTimeout(() => {
               void this.connect();
             }, delayMs);
           } else {
-            await logActivity('WHATSAPP', 'WhatsApp desconectado.', 'INFO');
+            await logActivity(this.userId, 'WHATSAPP', 'WhatsApp desconectado.', 'INFO');
           }
 
           await this.broadcastStatus();
@@ -256,7 +258,7 @@ class WhatsAppService {
       this.status = 'DISCONNECTED';
       this.lastError =
         err instanceof Error ? err.message : 'Erro ao inicializar conexão Baileys.';
-      await logActivity('WHATSAPP', this.lastError, 'ERROR');
+      await logActivity(this.userId, 'WHATSAPP', this.lastError, 'ERROR');
       await this.broadcastStatus();
     }
   }
@@ -276,7 +278,7 @@ class WhatsAppService {
           this.sock.end(new Error('Desconectado pelo usuário'));
         }
       } catch {
-        // Ignora erro caso socket já esteja fechado
+        // Ignora erro se socket já estiver fechado
       }
       this.sock = null;
     }
@@ -292,9 +294,10 @@ class WhatsAppService {
     this.connectedName = null;
     this.lastError = null;
 
-    emitSocketEvent('whatsapp:qr', { qrDataUrl: null });
+    emitUserEvent(this.userId, 'whatsapp:qr', { qrDataUrl: null });
     await this.broadcastStatus();
     await logActivity(
+      this.userId,
       'WHATSAPP',
       clearSession
         ? 'Sessão encerrada e credenciais locais removidas.'
@@ -305,17 +308,14 @@ class WhatsAppService {
 
   private async clearSessionFiles(): Promise<void> {
     try {
-      if (fs.existsSync(config.sessionDir)) {
-        fs.rmSync(config.sessionDir, { recursive: true, force: true });
+      if (fs.existsSync(this.sessionPath)) {
+        fs.rmSync(this.sessionPath, { recursive: true, force: true });
       }
     } catch (err) {
-      console.error('[WhatsApp] Erro ao limpar auth_session:', err);
+      console.error('[WhatsApp] Erro ao limpar sessão do usuário:', err);
     }
   }
 
-  /**
-   * Simula presença "digitando..." por 3 a 7 segundos antes de enviar
-   */
   public async simulateTypingAndSend(
     jid: string,
     text: string,
@@ -333,7 +333,7 @@ class WhatsAppService {
         await sleep(typingMs);
         await this.sock.sendPresenceUpdate('paused', jid);
       } catch {
-        // Presence update é best-effort; não impede envio se falhar
+        // Best-effort
       }
     }
 
@@ -348,8 +348,8 @@ class WhatsAppService {
     message: Awaited<ReturnType<typeof prisma.message.create>>;
     autoPausedAi: boolean;
   }> {
-    const conversation = await prisma.conversation.findUnique({
-      where: { id: conversationId },
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: conversationId, userId: this.userId },
       include: { contact: true },
     });
 
@@ -374,7 +374,9 @@ class WhatsAppService {
       },
     });
 
-    const settings = await prisma.appSettings.findUnique({ where: { id: 1 } });
+    const settings = await prisma.userSettings.findUnique({
+      where: { userId: this.userId },
+    });
     let autoPausedAi = false;
 
     const updateData: {
@@ -402,11 +404,12 @@ class WhatsAppService {
       },
     });
 
-    emitSocketEvent('message:new', message);
-    emitSocketEvent('conversation:updated', updatedConv);
-    emitSocketEvent('dashboard:refresh', {});
+    emitUserEvent(this.userId, 'message:new', message);
+    emitUserEvent(this.userId, 'conversation:updated', updatedConv);
+    emitUserEvent(this.userId, 'dashboard:refresh', {});
 
     await logActivity(
+      this.userId,
       'WHATSAPP',
       `Mensagem manual enviada para ${conversation.contact.name || conversation.contact.phone}${
         autoPausedAi ? ' (IA pausada automaticamente neste chat)' : ''
@@ -423,35 +426,26 @@ class WhatsAppService {
       if (!remoteJid) return;
       if (msg.key.fromMe) return;
       if (remoteJid === 'status@broadcast' || remoteJid.endsWith('@g.us')) {
-        return; // Ignora status e grupos para focar em atendimento 1:1
+        return;
       }
 
       const body = extractTextFromMessage(msg.message).trim();
       if (!body) return;
 
-      const waMessageId = msg.key.id || undefined;
-      if (waMessageId) {
-        const exists = await prisma.message.findUnique({
-          where: { waMessageId },
-        });
-        if (exists) return;
-      }
-
       const phone = remoteJid.split('@')[0].replace(/\D/g, '');
       const pushName = msg.pushName?.trim() || null;
 
-      // Upsert contato
       const contact = await prisma.contact.upsert({
-        where: { jid: remoteJid },
+        where: { userId_jid: { userId: this.userId, jid: remoteJid } },
         update: pushName ? { name: pushName } : {},
         create: {
+          userId: this.userId,
           phone,
           jid: remoteJid,
           name: pushName,
         },
       });
 
-      // Upsert conversa
       const conversation = await prisma.conversation.upsert({
         where: { contactId: contact.id },
         update: {
@@ -460,6 +454,7 @@ class WhatsAppService {
           unreadCount: { increment: 1 },
         },
         create: {
+          userId: this.userId,
           contactId: contact.id,
           mode: 'AUTO',
           lastMessageAt: new Date(),
@@ -472,6 +467,19 @@ class WhatsAppService {
         },
       });
 
+      const waMessageId = msg.key.id || undefined;
+      if (waMessageId) {
+        const exists = await prisma.message.findUnique({
+          where: {
+            conversationId_waMessageId: {
+              conversationId: conversation.id,
+              waMessageId,
+            },
+          },
+        });
+        if (exists) return;
+      }
+
       const savedMsg = await prisma.message.create({
         data: {
           conversationId: conversation.id,
@@ -483,17 +491,24 @@ class WhatsAppService {
         },
       });
 
-      emitSocketEvent('message:new', savedMsg);
-      emitSocketEvent('conversation:updated', conversation);
-      emitSocketEvent('dashboard:refresh', {});
+      emitUserEvent(this.userId, 'message:new', savedMsg);
+      emitUserEvent(this.userId, 'conversation:updated', conversation);
+      emitUserEvent(this.userId, 'dashboard:refresh', {});
 
       const contactLabel = contact.name || contact.phone;
-      await logActivity('WHATSAPP', `Mensagem recebida de ${contactLabel}.`, 'INFO');
+      await logActivity(
+        this.userId,
+        'WHATSAPP',
+        `Mensagem recebida de ${contactLabel}.`,
+        'INFO'
+      );
 
-      // Verifica se automação global e modo da conversa permitem resposta da IA
-      const settings = await prisma.appSettings.findUnique({ where: { id: 1 } });
+      const settings = await prisma.userSettings.findUnique({
+        where: { userId: this.userId },
+      });
       if (settings?.globalAutomationPaused) {
         await logActivity(
+          this.userId,
           'AI',
           `Automação global pausada — IA não respondeu ${contactLabel}.`,
           'WARN'
@@ -503,6 +518,7 @@ class WhatsAppService {
 
       if (conversation.mode !== 'AUTO') {
         await logActivity(
+          this.userId,
           'AI',
           `Chat com ${contactLabel} está em modo Manual — aguardando resposta humana.`,
           'INFO'
@@ -510,7 +526,6 @@ class WhatsAppService {
         return;
       }
 
-      // Debounce de 2.5s para agrupar mensagens picadas do cliente
       const existingTimer = this.pendingAiTimers.get(conversation.id);
       if (existingTimer) {
         clearTimeout(existingTimer);
@@ -525,6 +540,7 @@ class WhatsAppService {
     } catch (err) {
       console.error('[WhatsApp] Erro ao processar mensagem recebida:', err);
       await logActivity(
+        this.userId,
         'WHATSAPP',
         `Erro ao processar mensagem recebida: ${
           err instanceof Error ? err.message : 'desconhecido'
@@ -540,17 +556,18 @@ class WhatsAppService {
     contactLabel: string
   ): Promise<void> {
     try {
-      // Revalida estado antes de gerar e enviar
       const [settings, conv] = await Promise.all([
-        prisma.appSettings.findUnique({ where: { id: 1 } }),
-        prisma.conversation.findUnique({ where: { id: conversationId } }),
+        prisma.userSettings.findUnique({ where: { userId: this.userId } }),
+        prisma.conversation.findFirst({
+          where: { id: conversationId, userId: this.userId },
+        }),
       ]);
 
       if (!conv || conv.mode !== 'AUTO' || settings?.globalAutomationPaused) {
         return;
       }
 
-      const reply = await generateConversationReply(conversationId);
+      const reply = await generateConversationReply(this.userId, conversationId);
       const waMessageId = await this.simulateTypingAndSend(jid, reply.text, true);
 
       const savedOut = await prisma.message.create({
@@ -577,11 +594,12 @@ class WhatsAppService {
         },
       });
 
-      emitSocketEvent('message:new', savedOut);
-      emitSocketEvent('conversation:updated', updatedConv);
-      emitSocketEvent('dashboard:refresh', {});
+      emitUserEvent(this.userId, 'message:new', savedOut);
+      emitUserEvent(this.userId, 'conversation:updated', updatedConv);
+      emitUserEvent(this.userId, 'dashboard:refresh', {});
 
       await logActivity(
+        this.userId,
         'AI',
         `IA respondeu ${contactLabel} (Regra ${reply.ruleLevel}: ${reply.ruleName}).`,
         'SUCCESS'
@@ -589,6 +607,7 @@ class WhatsAppService {
 
       if (reply.shouldTransferToHuman) {
         await logActivity(
+          this.userId,
           'AI',
           `Condição de parada atingida para ${contactLabel}. Conversa transferida para modo Manual.`,
           'WARN'
@@ -596,10 +615,13 @@ class WhatsAppService {
       }
 
       if (settings?.autoSummarizeConversations) {
-        void generateConversationSummary(conversationId).catch(() => {});
+        void generateConversationSummary(this.userId, conversationId).catch(
+          () => {}
+        );
       }
     } catch (err) {
       await logActivity(
+        this.userId,
         'AI',
         `Falha na resposta da IA para ${contactLabel}: ${
           err instanceof Error ? err.message : 'Erro desconhecido'
@@ -610,4 +632,47 @@ class WhatsAppService {
   }
 }
 
-export const whatsappService = new WhatsAppService();
+class WhatsAppManager {
+  private sessions = new Map<string, UserWhatsAppSession>();
+
+  public getSession(userId: string): UserWhatsAppSession {
+    let session = this.sessions.get(userId);
+    if (!session) {
+      session = new UserWhatsAppSession(userId);
+      this.sessions.set(userId, session);
+    }
+    return session;
+  }
+
+  public async autoConnectExistingSessions(): Promise<void> {
+    try {
+      if (!fs.existsSync(config.sessionDir)) return;
+      const entries = fs.readdirSync(config.sessionDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const userId = entry.name;
+        const credsPath = path.join(config.sessionDir, userId, 'creds.json');
+        if (!fs.existsSync(credsPath)) continue;
+
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { id: true },
+        });
+        if (!user) continue;
+
+        const session = this.getSession(userId);
+        await logActivity(
+          userId,
+          'WHATSAPP',
+          'Sessão local detectada. Restaurando conexão com o WhatsApp...',
+          'INFO'
+        );
+        void session.connect();
+      }
+    } catch (err) {
+      console.error('[WhatsAppManager] Falha ao restaurar sessões:', err);
+    }
+  }
+}
+
+export const whatsappManager = new WhatsAppManager();

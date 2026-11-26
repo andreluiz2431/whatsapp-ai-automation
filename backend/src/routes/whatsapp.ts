@@ -1,13 +1,14 @@
 import { Router } from 'express';
 import { prisma } from '../db';
 import { logActivity } from '../services/activityLog';
-import { whatsappService } from '../services/whatsappService';
+import { whatsappManager } from '../services/whatsappService';
 
 export const whatsappRouter = Router();
 
-whatsappRouter.get('/status', async (_req, res) => {
+whatsappRouter.get('/status', async (req, res) => {
   try {
-    const state = await whatsappService.getState();
+    const userId = req.user!.id;
+    const state = await whatsappManager.getSession(userId).getState();
     res.json(state);
   } catch (err) {
     res.status(500).json({
@@ -16,10 +17,12 @@ whatsappRouter.get('/status', async (_req, res) => {
   }
 });
 
-whatsappRouter.post('/connect', async (_req, res) => {
+whatsappRouter.post('/connect', async (req, res) => {
   try {
-    void whatsappService.connect();
-    const state = await whatsappService.getState();
+    const userId = req.user!.id;
+    const session = whatsappManager.getSession(userId);
+    void session.connect();
+    const state = await session.getState();
     res.json({ ok: true, state });
   } catch (err) {
     res.status(500).json({
@@ -30,9 +33,11 @@ whatsappRouter.post('/connect', async (_req, res) => {
 
 whatsappRouter.post('/disconnect', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const clearSession = Boolean(req.body?.clearSession);
-    await whatsappService.disconnect(clearSession);
-    const state = await whatsappService.getState();
+    const session = whatsappManager.getSession(userId);
+    await session.disconnect(clearSession);
+    const state = await session.getState();
     res.json({ ok: true, state });
   } catch (err) {
     res.status(500).json({
@@ -43,13 +48,15 @@ whatsappRouter.post('/disconnect', async (req, res) => {
 
 whatsappRouter.post('/pause-global', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const paused = Boolean(req.body?.paused);
-    await prisma.appSettings.update({
-      where: { id: 1 },
+    await prisma.userSettings.update({
+      where: { userId },
       data: { globalAutomationPaused: paused },
     });
 
     await logActivity(
+      userId,
       'SYSTEM',
       paused
         ? 'Automação Global da IA PAUSADA pelo usuário.'
@@ -57,8 +64,9 @@ whatsappRouter.post('/pause-global', async (req, res) => {
       paused ? 'WARN' : 'SUCCESS'
     );
 
-    await whatsappService.broadcastStatus();
-    const state = await whatsappService.getState();
+    const session = whatsappManager.getSession(userId);
+    await session.broadcastStatus();
+    const state = await session.getState();
     res.json({ ok: true, state });
   } catch (err) {
     res.status(500).json({

@@ -3,15 +3,44 @@ import { config } from './config';
 
 export const prisma = new PrismaClient();
 
-export async function ensureDefaults(): Promise<void> {
-  // 1. Garante registro único de configurações globais
-  await prisma.appSettings.upsert({
-    where: { id: 1 },
+/**
+ * Inicialização global segura ao subir o servidor.
+ */
+export async function ensureServerRecovery(): Promise<void> {
+  // Recuperação segura de campanhas interrompidas por reinício do servidor
+  await prisma.campaignItem.updateMany({
+    where: { status: 'SENDING' },
+    data: { status: 'PENDING' },
+  });
+
+  await prisma.campaign.updateMany({
+    where: { status: 'RUNNING' },
+    data: { status: 'PAUSED' },
+  });
+
+  // Migra modelo Gemini descontinuado se algum usuário ainda o tiver salvo
+  await prisma.userSettings.updateMany({
+    where: { geminiModel: 'gemini-2.5-flash' },
+    data: { geminiModel: config.geminiModel },
+  });
+}
+
+/**
+ * Provisiona configurações, tags e regra Global padrão de forma isolada para cada usuário.
+ * Somente o usuário dono (primeiro cadastro ou OWNER_EMAIL) herda a GEMINI_API_KEY do ambiente;
+ * os demais usuários configuram sua própria chave de IA.
+ */
+export async function ensureUserDefaults(
+  userId: string,
+  inheritServerGeminiKey = false
+): Promise<void> {
+  await prisma.userSettings.upsert({
+    where: { userId },
     update: {},
     create: {
-      id: 1,
+      userId,
       aiProvider: config.aiProvider,
-      geminiApiKey: config.geminiApiKey,
+      geminiApiKey: inheritServerGeminiKey ? config.geminiApiKey : '',
       geminiModel: config.geminiModel,
       ollamaBaseUrl: config.ollamaBaseUrl,
       ollamaModel: config.ollamaModel,
@@ -25,13 +54,6 @@ export async function ensureDefaults(): Promise<void> {
     },
   });
 
-  // Migra automaticamente o modelo descontinuado gemini-2.5-flash para o modelo configurado
-  await prisma.appSettings.updateMany({
-    where: { id: 1, geminiModel: 'gemini-2.5-flash' },
-    data: { geminiModel: config.geminiModel },
-  });
-
-  // 2. Garante tags padrão úteis
   const defaultTags = [
     { name: 'Leads', color: '#3b82f6' },
     { name: 'Clientes VIP', color: '#f59e0b' },
@@ -40,20 +62,20 @@ export async function ensureDefaults(): Promise<void> {
 
   for (const tag of defaultTags) {
     await prisma.tag.upsert({
-      where: { name: tag.name },
+      where: { userId_name: { userId, name: tag.name } },
       update: {},
-      create: tag,
+      create: { userId, name: tag.name, color: tag.color },
     });
   }
 
-  // 3. Garante uma regra Global padrão caso não exista
   const globalRule = await prisma.aiRule.findFirst({
-    where: { scope: 'GLOBAL' },
+    where: { userId, scope: 'GLOBAL' },
   });
 
   if (!globalRule) {
     await prisma.aiRule.create({
       data: {
+        userId,
         name: 'Atendimento Padrão (Global)',
         scope: 'GLOBAL',
         isActive: true,
@@ -68,15 +90,4 @@ export async function ensureDefaults(): Promise<void> {
       },
     });
   }
-
-  // 4. Recuperação segura de campanhas interrompidas por reinício do servidor
-  await prisma.campaignItem.updateMany({
-    where: { status: 'SENDING' },
-    data: { status: 'PENDING' },
-  });
-
-  await prisma.campaign.updateMany({
-    where: { status: 'RUNNING' },
-    data: { status: 'PAUSED' },
-  });
 }

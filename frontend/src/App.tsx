@@ -1,13 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { NavTab, Sidebar } from './components/Sidebar';
 import { api } from './lib/api';
 import { socket } from './lib/socket';
+import { AuthPage } from './pages/AuthPage';
 import { CampaignsPage } from './pages/CampaignsPage';
 import { ConversationsPage } from './pages/ConversationsPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { RulesPage } from './pages/RulesPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { CampaignRuntimeState, Conversation, WhatsAppState } from './types';
+import {
+  AuthUser,
+  CampaignRuntimeState,
+  Conversation,
+  WhatsAppState,
+} from './types';
 
 const INITIAL_WA_STATE: WhatsAppState = {
   status: 'DISCONNECTED',
@@ -29,22 +35,42 @@ const INITIAL_RUNTIME: CampaignRuntimeState = {
 };
 
 export default function App() {
+  const [authChecked, setAuthChecked] = useState(false);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [waState, setWaState] = useState<WhatsAppState>(INITIAL_WA_STATE);
   const [campaignRuntime, setCampaignRuntime] =
     useState<CampaignRuntimeState>(INITIAL_RUNTIME);
   const [unreadTotal, setUnreadTotal] = useState(0);
 
-  const refreshUnread = async () => {
+  const refreshUnread = useCallback(async () => {
     try {
       const convs = await api.get<Conversation[]>('/conversations');
       setUnreadTotal(convs.reduce((acc, c) => acc + (c.unreadCount || 0), 0));
     } catch {
-      // ignora erro inicial caso backend ainda esteja subindo
+      // ignora erro temporário
     }
-  };
+  }, []);
 
   useEffect(() => {
+    api
+      .get<{ user: AuthUser | null }>('/auth/me')
+      .then((res) => setUser(res.user))
+      .catch(() => setUser(null))
+      .finally(() => setAuthChecked(true));
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      socket.disconnect();
+      setWaState(INITIAL_WA_STATE);
+      setCampaignRuntime(INITIAL_RUNTIME);
+      setUnreadTotal(0);
+      return;
+    }
+
+    socket.connect();
+
     api
       .get<WhatsAppState>('/whatsapp/status')
       .then(setWaState)
@@ -67,8 +93,9 @@ export default function App() {
       socket.off('whatsapp:qr', onQr);
       socket.off('campaign:runtime', onRuntime);
       socket.off('conversation:updated', onConvUpdated);
+      socket.disconnect();
     };
-  }, []);
+  }, [user, refreshUnread]);
 
   const handleToggleGlobalPause = async () => {
     try {
@@ -82,14 +109,39 @@ export default function App() {
     }
   };
 
+  const handleLogout = async () => {
+    try {
+      await api.post('/auth/logout');
+    } catch {
+      // ignora
+    }
+    socket.disconnect();
+    setUser(null);
+    setActiveTab('dashboard');
+  };
+
+  if (!authChecked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-sm text-slate-400">
+        Verificando sessão...
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthPage onAuthenticated={setUser} />;
+  }
+
   return (
     <div className="flex min-h-screen flex-col bg-slate-950 text-slate-100 lg:h-screen lg:flex-row lg:overflow-hidden">
       <Sidebar
+        user={user}
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         waState={waState}
         unreadTotal={unreadTotal}
         onToggleGlobalPause={handleToggleGlobalPause}
+        onLogout={handleLogout}
       />
 
       <main className="flex-1 overflow-y-auto p-4 lg:p-6">

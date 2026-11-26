@@ -12,6 +12,11 @@ export const config = {
     '..',
     process.env.WHATSAPP_SESSION_DIR || './auth_session'
   ),
+  // Autenticação
+  googleClientId: (process.env.GOOGLE_CLIENT_ID || '').trim(),
+  sessionSecret: (process.env.SESSION_SECRET || '').trim(),
+  ownerEmail: (process.env.OWNER_EMAIL || '').trim().toLowerCase(),
+  // Provedor de IA (padrões para novos usuários / owner)
   aiProvider: (process.env.AI_PROVIDER || 'gemini') as 'gemini' | 'ollama',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
   geminiModel: process.env.GEMINI_MODEL || 'gemini-3.8-flash',

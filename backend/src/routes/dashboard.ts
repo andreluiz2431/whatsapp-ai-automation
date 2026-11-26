@@ -3,13 +3,15 @@ import { prisma } from '../db';
 import {
   checkAiHealth,
   generateDailyExecutiveSummary,
+  getUserSettings,
 } from '../services/aiService';
-import { campaignQueue } from '../services/campaignQueue';
+import { campaignQueueManager } from '../services/campaignQueue';
 
 export const dashboardRouter = Router();
 
-dashboardRouter.get('/overview', async (_req, res) => {
+dashboardRouter.get('/overview', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
@@ -23,26 +25,35 @@ dashboardRouter.get('/overview', async (_req, res) => {
       logs,
       aiHealth,
     ] = await Promise.all([
-      prisma.conversation.count(),
-      prisma.conversation.count({ where: { mode: 'AUTO' } }),
+      prisma.conversation.count({ where: { userId } }),
+      prisma.conversation.count({ where: { userId, mode: 'AUTO' } }),
       prisma.message.count({
-        where: { direction: 'OUTBOUND', createdAt: { gte: startOfDay } },
+        where: {
+          direction: 'OUTBOUND',
+          createdAt: { gte: startOfDay },
+          conversation: { userId },
+        },
       }),
       prisma.message.count({
-        where: { direction: 'INBOUND', createdAt: { gte: startOfDay } },
+        where: {
+          direction: 'INBOUND',
+          createdAt: { gte: startOfDay },
+          conversation: { userId },
+        },
       }),
       prisma.campaignItem.count({
         where: {
           status: 'PENDING',
-          campaign: { status: { in: ['DRAFT', 'RUNNING', 'PAUSED'] } },
+          campaign: { userId, status: { in: ['DRAFT', 'RUNNING', 'PAUSED'] } },
         },
       }),
-      prisma.appSettings.findUnique({ where: { id: 1 } }),
+      getUserSettings(userId),
       prisma.activityLog.findMany({
+        where: { userId },
         orderBy: { createdAt: 'desc' },
         take: 60,
       }),
-      checkAiHealth(),
+      checkAiHealth(userId),
     ]);
 
     res.json({
@@ -54,10 +65,10 @@ dashboardRouter.get('/overview', async (_req, res) => {
         pendingQueueCount,
       },
       aiHealth,
-      campaignRuntime: campaignQueue.getRuntimeState(),
+      campaignRuntime: campaignQueueManager.getRunner(userId).getRuntimeState(),
       dailySummary: {
-        text: settings?.lastDailySummary || null,
-        updatedAt: settings?.lastDailySummaryAt || null,
+        text: settings.lastDailySummary || null,
+        updatedAt: settings.lastDailySummaryAt || null,
       },
       logs,
     });
@@ -70,8 +81,10 @@ dashboardRouter.get('/overview', async (_req, res) => {
 
 dashboardRouter.get('/logs', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const limit = Math.min(Number(req.query.limit || 80), 200);
     const logs = await prisma.activityLog.findMany({
+      where: { userId },
       orderBy: { createdAt: 'desc' },
       take: limit,
     });
@@ -83,9 +96,10 @@ dashboardRouter.get('/logs', async (req, res) => {
   }
 });
 
-dashboardRouter.post('/daily-summary', async (_req, res) => {
+dashboardRouter.post('/daily-summary', async (req, res) => {
   try {
-    const summary = await generateDailyExecutiveSummary();
+    const userId = req.user!.id;
+    const summary = await generateDailyExecutiveSummary(userId);
     res.json({ summary, updatedAt: new Date().toISOString() });
   } catch (err) {
     res.status(500).json({

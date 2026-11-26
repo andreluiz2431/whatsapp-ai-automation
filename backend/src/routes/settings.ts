@@ -1,20 +1,22 @@
 import { Router } from 'express';
 import { prisma } from '../db';
-import { emitSocketEvent, logActivity } from '../services/activityLog';
+import { emitUserEvent, logActivity } from '../services/activityLog';
 import {
   checkAiHealth,
+  getUserSettings,
   listAvailableGeminiModels,
   testAiConnection,
 } from '../services/aiService';
-import { whatsappService } from '../services/whatsappService';
+import { whatsappManager } from '../services/whatsappService';
 
 export const settingsRouter = Router();
 
-settingsRouter.get('/', async (_req, res) => {
+settingsRouter.get('/', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const [settings, aiHealth] = await Promise.all([
-      prisma.appSettings.findUnique({ where: { id: 1 } }),
-      checkAiHealth(),
+      getUserSettings(userId),
+      checkAiHealth(userId),
     ]);
     res.json({ settings, aiHealth });
   } catch (err) {
@@ -26,6 +28,7 @@ settingsRouter.get('/', async (_req, res) => {
 
 settingsRouter.put('/', async (req, res) => {
   try {
+    const userId = req.user!.id;
     const {
       aiProvider,
       geminiApiKey,
@@ -41,8 +44,8 @@ settingsRouter.put('/', async (req, res) => {
       defaultBatchPauseMin,
     } = req.body;
 
-    const updated = await prisma.appSettings.update({
-      where: { id: 1 },
+    const updated = await prisma.userSettings.update({
+      where: { userId },
       data: {
         ...(aiProvider !== undefined ? { aiProvider: String(aiProvider) } : {}),
         ...(geminiApiKey !== undefined
@@ -81,12 +84,17 @@ settingsRouter.put('/', async (req, res) => {
       },
     });
 
-    const aiHealth = await checkAiHealth();
-    await whatsappService.broadcastStatus();
-    emitSocketEvent('dashboard:refresh', {});
+    const aiHealth = await checkAiHealth(userId);
+    await whatsappManager.getSession(userId).broadcastStatus();
+    emitUserEvent(userId, 'dashboard:refresh', {});
     await logActivity(
+      userId,
       'SYSTEM',
-      `Configurações atualizadas (Provedor IA: ${updated.aiProvider === 'gemini' ? `Gemini ${updated.geminiModel}` : `Ollama ${updated.ollamaModel}`}).`,
+      `Configurações atualizadas (Provedor IA: ${
+        updated.aiProvider === 'gemini'
+          ? `Gemini ${updated.geminiModel}`
+          : `Ollama ${updated.ollamaModel}`
+      }).`,
       'INFO'
     );
 
@@ -98,9 +106,10 @@ settingsRouter.put('/', async (req, res) => {
   }
 });
 
-settingsRouter.post('/test-ai', async (_req, res) => {
+settingsRouter.post('/test-ai', async (req, res) => {
   try {
-    const result = await testAiConnection();
+    const userId = req.user!.id;
+    const result = await testAiConnection(userId);
     res.json(result);
   } catch (err) {
     res.status(500).json({
@@ -110,9 +119,10 @@ settingsRouter.post('/test-ai', async (_req, res) => {
   }
 });
 
-settingsRouter.get('/gemini-models', async (_req, res) => {
+settingsRouter.get('/gemini-models', async (req, res) => {
   try {
-    const models = await listAvailableGeminiModels();
+    const userId = req.user!.id;
+    const models = await listAvailableGeminiModels(userId);
     res.json({ models });
   } catch {
     res.json({ models: [] });

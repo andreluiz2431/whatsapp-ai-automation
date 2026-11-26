@@ -1,8 +1,8 @@
 import { prisma } from '../db';
 import { CampaignRuntimeState } from '../types';
-import { emitSocketEvent, logActivity } from './activityLog';
+import { emitUserEvent, logActivity } from './activityLog';
 import { generateMessageVariation } from './aiService';
-import { normalizePhoneAndJid, whatsappService } from './whatsappService';
+import { normalizePhoneAndJid, whatsappManager } from './whatsappService';
 
 function randomInt(min: number, max: number): number {
   const safeMin = Math.max(1, Math.min(min, max));
@@ -18,7 +18,8 @@ function renderTemplate(template: string, name: string): string {
     .replace(/\{\{\s*name\s*\}\}/gi, name);
 }
 
-class CampaignQueueService {
+class UserCampaignRunner {
+  private readonly userId: string;
   private running = false;
   private activeCampaignId: string | null = null;
   private activeCampaignName: string | null = null;
@@ -27,6 +28,10 @@ class CampaignQueueService {
   private currentContactName: string | null = null;
   private batchSentCounter = 0;
   private stopRequested = false;
+
+  constructor(userId: string) {
+    this.userId = userId;
+  }
 
   public getRuntimeState(): CampaignRuntimeState {
     return {
@@ -40,7 +45,7 @@ class CampaignQueueService {
   }
 
   private emitRuntime(): void {
-    emitSocketEvent('campaign:runtime', this.getRuntimeState());
+    emitUserEvent(this.userId, 'campaign:runtime', this.getRuntimeState());
   }
 
   private async interruptibleWait(ms: number): Promise<boolean> {
@@ -61,20 +66,22 @@ class CampaignQueueService {
   }
 
   public async startCampaign(campaignId: string): Promise<void> {
+    const wa = whatsappManager.getSession(this.userId);
+
     if (this.running && this.activeCampaignId !== campaignId) {
       throw new Error(
         `Já existe uma campanha em andamento ("${this.activeCampaignName}"). Pause ou conclua antes de iniciar outra para respeitar o controle anti-ban.`
       );
     }
 
-    if (!whatsappService.isConnected()) {
+    if (!wa.isConnected()) {
       throw new Error(
         'WhatsApp desconectado. Conecte seu dispositivo via QR Code antes de iniciar a campanha.'
       );
     }
 
-    const campaign = await prisma.campaign.findUnique({
-      where: { id: campaignId },
+    const campaign = await prisma.campaign.findFirst({
+      where: { id: campaignId, userId: this.userId },
     });
     if (!campaign) {
       throw new Error('Campanha não encontrada.');
@@ -101,8 +108,9 @@ class CampaignQueueService {
     this.activeCampaignName = campaign.name;
     this.batchSentCounter = 0;
 
-    whatsappService.setCampaignRunning(true);
+    wa.setCampaignRunning(true);
     await logActivity(
+      this.userId,
       'CAMPAIGN',
       `Campanha "${campaign.name}" iniciada (${pendingCount} contato(s) na fila). Intervalo anti-ban: ${campaign.minDelaySec}s–${campaign.maxDelaySec}s.`,
       'SUCCESS'
@@ -112,6 +120,11 @@ class CampaignQueueService {
   }
 
   public async pauseCampaign(campaignId: string): Promise<void> {
+    const campaign = await prisma.campaign.findFirst({
+      where: { id: campaignId, userId: this.userId },
+    });
+    if (!campaign) throw new Error('Campanha não encontrada.');
+
     if (this.activeCampaignId === campaignId) {
       this.stopRequested = true;
     }
@@ -121,12 +134,17 @@ class CampaignQueueService {
       data: { status: 'PAUSED' },
     });
 
-    await logActivity('CAMPAIGN', 'Campanha pausada pelo usuário.', 'WARN');
-    emitSocketEvent('campaign:progress', { campaignId });
-    emitSocketEvent('dashboard:refresh', {});
+    await logActivity(this.userId, 'CAMPAIGN', 'Campanha pausada pelo usuário.', 'WARN');
+    emitUserEvent(this.userId, 'campaign:progress', { campaignId });
+    emitUserEvent(this.userId, 'dashboard:refresh', {});
   }
 
   public async cancelCampaign(campaignId: string): Promise<void> {
+    const campaign = await prisma.campaign.findFirst({
+      where: { id: campaignId, userId: this.userId },
+    });
+    if (!campaign) throw new Error('Campanha não encontrada.');
+
     if (this.activeCampaignId === campaignId) {
       this.stopRequested = true;
     }
@@ -141,16 +159,17 @@ class CampaignQueueService {
       data: { status: 'CANCELLED', completedAt: new Date() },
     });
 
-    await logActivity('CAMPAIGN', 'Campanha cancelada.', 'WARN');
-    emitSocketEvent('campaign:progress', { campaignId });
-    emitSocketEvent('dashboard:refresh', {});
+    await logActivity(this.userId, 'CAMPAIGN', 'Campanha cancelada.', 'WARN');
+    emitUserEvent(this.userId, 'campaign:progress', { campaignId });
+    emitUserEvent(this.userId, 'dashboard:refresh', {});
   }
 
   private async processLoop(campaignId: string): Promise<void> {
+    const wa = whatsappManager.getSession(this.userId);
     try {
       while (!this.stopRequested) {
-        const campaign = await prisma.campaign.findUnique({
-          where: { id: campaignId },
+        const campaign = await prisma.campaign.findFirst({
+          where: { id: campaignId, userId: this.userId },
         });
         if (!campaign || campaign.status !== 'RUNNING') {
           break;
@@ -167,21 +186,22 @@ class CampaignQueueService {
             data: { status: 'COMPLETED', completedAt: new Date() },
           });
           await logActivity(
+            this.userId,
             'CAMPAIGN',
             `Campanha "${campaign.name}" concluída! Enviados: ${campaign.sentCount}, Erros: ${campaign.failedCount}.`,
             'SUCCESS'
           );
-          emitSocketEvent('campaign:progress', { campaignId });
-          emitSocketEvent('dashboard:refresh', {});
+          emitUserEvent(this.userId, 'campaign:progress', { campaignId });
+          emitUserEvent(this.userId, 'dashboard:refresh', {});
           break;
         }
 
-        // Garante conexão antes de enviar
-        if (!whatsappService.isConnected()) {
+        if (!wa.isConnected()) {
           this.phase = 'WAITING_CONNECTION';
           this.currentContactName = nextItem.name;
           this.emitRuntime();
           await logActivity(
+            this.userId,
             'CAMPAIGN',
             'WhatsApp desconectado durante campanha. Pausando disparos automaticamente.',
             'WARN'
@@ -190,11 +210,10 @@ class CampaignQueueService {
             where: { id: campaignId },
             data: { status: 'PAUSED' },
           });
-          emitSocketEvent('campaign:progress', { campaignId });
+          emitUserEvent(this.userId, 'campaign:progress', { campaignId });
           break;
         }
 
-        // Marca item em envio
         this.phase = 'SENDING';
         this.currentContactName = nextItem.name;
         this.emitRuntime();
@@ -209,6 +228,7 @@ class CampaignQueueService {
 
         if (campaign.useAiVariation) {
           finalMessage = await generateMessageVariation(
+            this.userId,
             finalMessage,
             nextItem.name
           );
@@ -216,22 +236,22 @@ class CampaignQueueService {
 
         try {
           await logActivity(
+            this.userId,
             'CAMPAIGN',
             `Simulando digitação e enviando para ${nextItem.name} (${phone})...`,
             'INFO'
           );
 
-          const waMessageId = await whatsappService.simulateTypingAndSend(
+          const waMessageId = await wa.simulateTypingAndSend(
             jid,
             finalMessage,
             true
           );
 
-          // Garante contato e conversa no banco para aparecer no painel de chat
           const contact = await prisma.contact.upsert({
-            where: { jid },
+            where: { userId_jid: { userId: this.userId, jid } },
             update: { name: nextItem.name },
-            create: { phone, jid, name: nextItem.name },
+            create: { userId: this.userId, phone, jid, name: nextItem.name },
           });
 
           const conversation = await prisma.conversation.upsert({
@@ -245,6 +265,7 @@ class CampaignQueueService {
               lastMessagePreview: finalMessage.slice(0, 120),
             },
             create: {
+              userId: this.userId,
               contactId: contact.id,
               mode: campaign.autoEnableAiOnReply ? 'AUTO' : 'MANUAL',
               activeRuleId: campaign.autoEnableAiOnReply
@@ -287,12 +308,13 @@ class CampaignQueueService {
 
           this.batchSentCounter += 1;
 
-          emitSocketEvent('message:new', savedMsg);
-          emitSocketEvent('conversation:updated', conversation);
-          emitSocketEvent('campaign:progress', { campaignId });
-          emitSocketEvent('dashboard:refresh', {});
+          emitUserEvent(this.userId, 'message:new', savedMsg);
+          emitUserEvent(this.userId, 'conversation:updated', conversation);
+          emitUserEvent(this.userId, 'campaign:progress', { campaignId });
+          emitUserEvent(this.userId, 'dashboard:refresh', {});
 
           await logActivity(
+            this.userId,
             'CAMPAIGN',
             `Disparo enviado para ${nextItem.name} (${phone}).`,
             'SUCCESS'
@@ -317,17 +339,17 @@ class CampaignQueueService {
             data: { failedCount: { increment: 1 } },
           });
 
-          emitSocketEvent('campaign:progress', { campaignId });
-          emitSocketEvent('dashboard:refresh', {});
+          emitUserEvent(this.userId, 'campaign:progress', { campaignId });
+          emitUserEvent(this.userId, 'dashboard:refresh', {});
 
           await logActivity(
+            this.userId,
             'CAMPAIGN',
             `Erro ao enviar para ${nextItem.name} (${phone}): ${errMsg}`,
             'ERROR'
           );
         }
 
-        // Verifica se ainda há itens pendentes antes de aguardar intervalo anti-ban
         const remaining = await prisma.campaignItem.count({
           where: { campaignId, status: 'PENDING' },
         });
@@ -335,7 +357,6 @@ class CampaignQueueService {
           continue;
         }
 
-        // Pausa em lote anti-ban (padrão: 5 min a cada 20 mensagens)
         if (
           campaign.batchSize > 0 &&
           this.batchSentCounter >= campaign.batchSize
@@ -344,6 +365,7 @@ class CampaignQueueService {
           const pauseMs = Math.max(1, campaign.batchPauseMin) * 60 * 1000;
           this.phase = 'BATCH_PAUSE';
           await logActivity(
+            this.userId,
             'CAMPAIGN',
             `Pausa em lote anti-ban: aguardando ${campaign.batchPauseMin} minuto(s) após ${campaign.batchSize} disparos...`,
             'WARN'
@@ -351,10 +373,10 @@ class CampaignQueueService {
           const completedWait = await this.interruptibleWait(pauseMs);
           if (!completedWait) break;
         } else {
-          // Jitter aleatório entre minDelaySec e maxDelaySec (padrão: 45s–120s)
           const delaySec = randomInt(campaign.minDelaySec, campaign.maxDelaySec);
           this.phase = 'JITTER_DELAY';
           await logActivity(
+            this.userId,
             'CAMPAIGN',
             `Aguardando intervalo anti-ban de ${delaySec}s antes do próximo disparo (${remaining} restante(s))...`,
             'INFO'
@@ -371,10 +393,23 @@ class CampaignQueueService {
       this.nextSendAt = null;
       this.currentContactName = null;
       this.stopRequested = false;
-      whatsappService.setCampaignRunning(false);
+      wa.setCampaignRunning(false);
       this.emitRuntime();
     }
   }
 }
 
-export const campaignQueue = new CampaignQueueService();
+class CampaignQueueManager {
+  private runners = new Map<string, UserCampaignRunner>();
+
+  public getRunner(userId: string): UserCampaignRunner {
+    let runner = this.runners.get(userId);
+    if (!runner) {
+      runner = new UserCampaignRunner(userId);
+      this.runners.set(userId, runner);
+    }
+    return runner;
+  }
+}
+
+export const campaignQueueManager = new CampaignQueueManager();

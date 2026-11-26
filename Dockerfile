@@ -26,7 +26,7 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3001
-# Recomendado montar um Volume no Railway em /app/data para persistir SQLite + sessão WhatsApp
+# Recomendado montar um Volume no Railway em /app/data para persistir SQLite + sessões WhatsApp isoladas
 ENV DATABASE_URL="file:/app/data/dev.db"
 ENV WHATSAPP_SESSION_DIR="/app/data/auth_session"
 
@@ -42,5 +42,5 @@ WORKDIR /app/backend
 
 EXPOSE 3001
 
-# Sincroniza o schema SQLite no Volume persistente e inicia o servidor
-CMD ["sh", "-c", "mkdir -p /app/data/auth_session && npx prisma db push --skip-generate && node dist/index.js"]
+# Migração segura única de DB single-tenant legado -> multi-tenant + sync Prisma + boot
+CMD ["sh", "-c", "mkdir -p /app/data/auth_session && node -e \"const fs=require('fs');const f='/app/data/dev.db';if(fs.existsSync(f)){const b=fs.readFileSync(f).toString('latin1');if(b.includes('AppSettings')&&!b.includes('UserSettings')){fs.renameSync(f,f+'.legacy.bak');console.log('Backed up legacy single-tenant DB to dev.db.legacy.bak');}}\" && npx prisma db push --skip-generate && node dist/index.js"]
