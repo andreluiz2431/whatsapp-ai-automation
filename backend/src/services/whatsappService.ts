@@ -485,11 +485,8 @@ class UserWhatsAppSession {
         version,
         auth: {
           creds: state.creds,
-          keys: makeCacheableSignalKeyStore(
-            state.keys,
-            logger,
-            this.signalKeyCache
-          ),
+          // Usa o NodeCache nativo do Baileys (TTL curto de 5 min) para nunca reter chaves Signal obsoletas
+          keys: makeCacheableSignalKeyStore(state.keys, logger),
         },
         logger,
         printQRInTerminal: false,
@@ -653,6 +650,56 @@ class UserWhatsAppSession {
     );
   }
 
+  /**
+   * Repara sessões de criptografia Signal corrompidas (Bad MAC / "Aguardando mensagem...")
+   * removendo apenas arquivos session-*.json e sender-key-*.json — preservando creds.json
+   * para reconectar automaticamente SEM precisar escanear QR Code novamente.
+   */
+  public async repairEncryptionSessions(): Promise<{ removedFiles: number }> {
+    const hadSession = this.hasSavedSession();
+    await this.disconnect(false);
+
+    this.signalKeyCache.flushAll();
+    this.msgRetryCounterCache.flushAll();
+    this.userDevicesCache.flushAll();
+
+    let removedFiles = 0;
+    try {
+      if (fs.existsSync(this.sessionPath)) {
+        const files = fs.readdirSync(this.sessionPath);
+        for (const file of files) {
+          if (
+            file.startsWith('session-') ||
+            file.startsWith('sender-key-') ||
+            file.startsWith('sender-key-memory-')
+          ) {
+            try {
+              fs.rmSync(path.join(this.sessionPath, file), { force: true });
+              removedFiles++;
+            } catch {
+              // ignora falha individual
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[WhatsApp] Erro ao reparar sessões Signal:', err);
+    }
+
+    await logActivity(
+      this.userId,
+      'WHATSAPP',
+      `Reparo de criptografia Signal executado (${removedFiles} chave(s) de sessão renovada(s) sem perder login). Reconectando...`,
+      'SUCCESS'
+    );
+
+    if (hadSession) {
+      void this.connect();
+    }
+
+    return { removedFiles };
+  }
+
   private async clearSessionFiles(): Promise<void> {
     this.signalKeyCache.flushAll();
     this.msgRetryCounterCache.flushAll();
@@ -719,8 +766,9 @@ class UserWhatsAppSession {
       throw new Error('Conversa não encontrada.');
     }
 
+    const targetJid = conversation.contact.replyJid || conversation.contact.jid;
     const waMessageId = await this.simulateTypingAndSend(
-      conversation.contact.jid,
+      targetJid,
       body,
       false
     );
@@ -964,13 +1012,19 @@ class UserWhatsAppSession {
         }
       }
 
+      // Preserva rawRemoteJid (incluindo @lid) como replyJid para manter as chaves Signal
+      // sincronizadas ao responder, evitando Bad MAC / "Aguardando mensagem..." no cliente.
       const contact = await prisma.contact.upsert({
         where: { userId_jid: { userId: this.userId, jid: remoteJid } },
-        update: pushName ? { name: pushName } : {},
+        update: {
+          ...(pushName ? { name: pushName } : {}),
+          replyJid: rawRemoteJid,
+        },
         create: {
           userId: this.userId,
           phone,
           jid: remoteJid,
+          replyJid: rawRemoteJid,
           name: pushName,
         },
       });
@@ -1068,8 +1122,9 @@ class UserWhatsAppSession {
               contact.name
             );
             try {
+              const targetJid = contact.replyJid || contact.jid;
               const waNoticeId = await this.simulateTypingAndSend(
-                contact.jid,
+                targetJid,
                 noticeText,
                 true
               );
@@ -1151,7 +1206,7 @@ class UserWhatsAppSession {
         this.pendingAiTimers.delete(conversation.id);
         void this.respondWithAi(
           conversation.id,
-          contact.jid,
+          contact.replyJid || contact.jid,
           contactLabel,
           contact.phone,
           body.slice(0, 80)
@@ -1211,7 +1266,7 @@ class UserWhatsAppSession {
       });
 
       const waMessageId = await this.simulateTypingAndSend(
-        conv.contact.jid,
+        conv.contact.replyJid || conv.contact.jid,
         reply.text,
         true
       );
@@ -1354,7 +1409,12 @@ class UserWhatsAppSession {
         updatedAt: new Date().toISOString(),
       });
 
-      const waMessageId = await this.simulateTypingAndSend(jid, reply.text, true);
+      const targetJid = conv.contact.replyJid || jid || conv.contact.jid;
+      const waMessageId = await this.simulateTypingAndSend(
+        targetJid,
+        reply.text,
+        true
+      );
 
       const savedOut = await prisma.message.create({
         data: {

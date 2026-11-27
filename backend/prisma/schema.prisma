@@ -91,6 +91,7 @@ model Contact {
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   phone         String
   jid           String
+  replyJid      String?        // Preserva JID real de resposta (ex: @lid) para manter criptografia Signal sincronizada
   name          String?
   notes         String?
   tags          ContactTag[]

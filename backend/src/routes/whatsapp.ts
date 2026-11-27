@@ -46,6 +46,23 @@ whatsappRouter.post('/disconnect', async (req, res) => {
   }
 });
 
+whatsappRouter.post('/repair-sessions', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const session = whatsappManager.getSession(userId);
+    const result = await session.repairEncryptionSessions();
+    const state = await session.getState();
+    res.json({ ok: true, ...result, state });
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Erro ao reparar chaves de criptografia do WhatsApp.',
+    });
+  }
+});
+
 whatsappRouter.post('/pause-global', async (req, res) => {
   try {
     const userId = req.user!.id;
