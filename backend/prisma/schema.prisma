@@ -8,24 +8,41 @@ datasource db {
 }
 
 model User {
-  id            String         @id @default(cuid())
-  email         String         @unique
-  name          String
-  avatarUrl     String?
-  googleSub     String?        @unique
-  passwordHash  String?
-  isOwner       Boolean        @default(false)
-  settings      UserSettings?
-  contacts      Contact[]
-  tags          Tag[]
-  conversations Conversation[]
+  id               String         @id @default(cuid())
+  email            String         @unique
+  name             String
+  avatarUrl        String?
+  googleSub        String?        @unique
+  passwordHash     String?
+  isOwner          Boolean        @default(false)
+  role             String         @default("USER") // ADMIN | USER
+  status           String         @default("ACTIVE") // ACTIVE | PENDING | SUSPENDED
+  plan             String         @default("FREE") // FREE | TRIAL | PRO | ENTERPRISE
+  licenseStatus    String         @default("ACTIVE") // ACTIVE | TRIAL | EXPIRED | SUSPENDED
+  licenseExpiresAt DateTime?
+  permissionsJson  String         @default("{\"conversations\":true,\"rules\":true,\"training\":true,\"campaigns\":true,\"vision\":true,\"audio\":true}")
+  adminNotes       String?
+  lastLoginAt      DateTime?
+  settings         UserSettings?
+  contacts         Contact[]
+  tags             Tag[]
+  conversations    Conversation[]
   aiRules           AiRule[]
   trainingExamples  AiTrainingExample[]
   aiUsageLogs       AiUsageLog[]
   campaigns         Campaign[]
   activityLogs      ActivityLog[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+}
+
+model SystemConfig {
+  id                     String   @id @default("global")
+  requireAdminApproval   Boolean  @default(false)
+  defaultNewUserPlan     String   @default("FREE")
+  defaultTrialDays       Int      @default(0)
+  defaultPermissionsJson String   @default("{\"conversations\":true,\"rules\":true,\"training\":true,\"campaigns\":true,\"vision\":true,\"audio\":true}")
+  updatedAt              DateTime @updatedAt
 }
 
 model UserSettings {

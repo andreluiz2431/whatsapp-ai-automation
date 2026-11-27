@@ -9,6 +9,7 @@ import {
   PauseCircle,
   PlayCircle,
   Settings,
+  Shield,
   SlidersHorizontal,
   Sparkles,
 } from 'lucide-react';
@@ -23,7 +24,8 @@ export type NavTab =
   | 'training'
   | 'campaigns'
   | 'settings'
-  | 'guide';
+  | 'guide'
+  | 'admin';
 
 interface Props {
   user: AuthUser;
@@ -42,14 +44,41 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-const NAV_ITEMS: Array<{ id: NavTab; label: string; icon: typeof LayoutDashboard }> = [
+const NAV_ITEMS: Array<{
+  id: NavTab;
+  label: string;
+  icon: typeof LayoutDashboard;
+  permissionKey?: 'conversations' | 'rules' | 'training' | 'campaigns';
+  adminOnly?: boolean;
+}> = [
   { id: 'dashboard', label: 'Painel de Controle', icon: LayoutDashboard },
-  { id: 'conversations', label: 'Conversas', icon: MessageSquare },
-  { id: 'rules', label: 'Fluxos & Personas IA', icon: SlidersHorizontal },
-  { id: 'training', label: 'Treinamento IA', icon: GraduationCap },
-  { id: 'campaigns', label: 'Campanhas & Disparos', icon: Megaphone },
+  {
+    id: 'conversations',
+    label: 'Conversas',
+    icon: MessageSquare,
+    permissionKey: 'conversations',
+  },
+  {
+    id: 'rules',
+    label: 'Fluxos & Personas IA',
+    icon: SlidersHorizontal,
+    permissionKey: 'rules',
+  },
+  {
+    id: 'training',
+    label: 'Treinamento IA',
+    icon: GraduationCap,
+    permissionKey: 'training',
+  },
+  {
+    id: 'campaigns',
+    label: 'Campanhas & Disparos',
+    icon: Megaphone,
+    permissionKey: 'campaigns',
+  },
   { id: 'settings', label: 'Configurações IA', icon: Settings },
   { id: 'guide', label: 'Manual & Sobre', icon: BookOpen },
+  { id: 'admin', label: 'Administração', icon: Shield, adminOnly: true },
 ];
 
 export function Sidebar({
@@ -252,7 +281,14 @@ export function Sidebar({
       </div>
 
       <nav className="flex shrink-0 gap-1 overflow-x-auto p-2.5 lg:flex-col lg:overflow-visible">
-        {NAV_ITEMS.map((item) => {
+        {NAV_ITEMS.filter((item) => {
+          const isAdmin = user.isOwner || user.role === 'ADMIN';
+          if (item.adminOnly) return isAdmin;
+          if (item.permissionKey && !isAdmin) {
+            return user.permissions?.[item.permissionKey] !== false;
+          }
+          return true;
+        }).map((item) => {
           const Icon = item.icon;
           const active = activeTab === item.id;
           return (

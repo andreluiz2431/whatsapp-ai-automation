@@ -6,6 +6,7 @@ import path from 'path';
 import { Server } from 'socket.io';
 import { config } from './config';
 import { ensureServerRecovery, prisma } from './db';
+import { adminRouter } from './routes/admin';
 import { authRouter } from './routes/auth';
 import { campaignsRouter } from './routes/campaigns';
 import { conversationsRouter } from './routes/conversations';
@@ -18,7 +19,10 @@ import { getUserRoom, setSocketServer } from './services/activityLog';
 import { getAiUsageSummary } from './services/aiService';
 import {
   extractTokenFromHeaders,
+  getUserAccessBlockReason,
+  requireAdmin,
   requireAuth,
+  requireModule,
   resolveUserFromToken,
 } from './services/authService';
 import { campaignQueueManager } from './services/campaignQueue';
@@ -85,7 +89,7 @@ async function bootstrap(): Promise<void> {
         return;
       }
       const user = await resolveUserFromToken(token);
-      if (!user) {
+      if (!user || getUserAccessBlockReason(user)) {
         next(new Error('UNAUTHORIZED'));
         return;
       }
@@ -123,13 +127,14 @@ async function bootstrap(): Promise<void> {
   app.use('/api/auth', authRouter);
 
   // Todas as demais rotas exigem usuário autenticado e isolam dados por userId
+  app.use('/api/admin', requireAuth, requireAdmin, adminRouter);
   app.use('/api/whatsapp', requireAuth, whatsappRouter);
   app.use('/api/dashboard', requireAuth, dashboardRouter);
-  app.use('/api/conversations', requireAuth, conversationsRouter);
-  app.use('/api/rules', requireAuth, rulesRouter);
-  app.use('/api/campaigns', requireAuth, campaignsRouter);
+  app.use('/api/conversations', requireAuth, requireModule('conversations'), conversationsRouter);
+  app.use('/api/rules', requireAuth, requireModule('rules'), rulesRouter);
+  app.use('/api/campaigns', requireAuth, requireModule('campaigns'), campaignsRouter);
   app.use('/api/settings', requireAuth, settingsRouter);
-  app.use('/api/training', requireAuth, trainingRouter);
+  app.use('/api/training', requireAuth, requireModule('training'), trainingRouter);
 
   // Serve o frontend compilado em produção (Railway single-service deploy)
   const frontendDist = path.resolve(__dirname, '../../frontend/dist');

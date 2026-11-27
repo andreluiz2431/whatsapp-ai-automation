@@ -24,6 +24,7 @@ import {
   generateConversationSummary,
   transcribeAudioWithAi,
 } from './aiService';
+import { isUserAdmin, parsePermissions } from './authService';
 
 const logger = pino({ level: 'silent' });
 
@@ -408,6 +409,20 @@ class UserWhatsAppSession {
 
   public isConnected(): boolean {
     return this.status === 'CONNECTED' && this.sock !== null;
+  }
+
+  public getQuickStatus(): {
+    status: WhatsAppConnectionStatus;
+    connectedPhone: string | null;
+  } {
+    const effectiveStatus: WhatsAppConnectionStatus =
+      this.status === 'CONNECTED' && this.campaignRunning
+        ? 'CAMPAIGN_RUNNING'
+        : this.status;
+    return {
+      status: effectiveStatus,
+      connectedPhone: this.connectedPhone,
+    };
   }
 
   public async getState(): Promise<WhatsAppStatePayload> {
@@ -828,15 +843,23 @@ class UserWhatsAppSession {
         return;
       }
 
-      const settings = await prisma.userSettings.findUnique({
-        where: { userId: this.userId },
-      });
+      const [settings, userMeta] = await Promise.all([
+        prisma.userSettings.findUnique({ where: { userId: this.userId } }),
+        prisma.user.findUnique({
+          where: { id: this.userId },
+          select: { isOwner: true, role: true, permissionsJson: true },
+        }),
+      ]);
+      const userPerms =
+        userMeta && isUserAdmin({ isOwner: userMeta.isOwner, role: (userMeta.role as 'ADMIN' | 'USER') || 'USER' })
+          ? { vision: true, audio: true }
+          : parsePermissions(userMeta?.permissionsJson);
 
       const phone = remoteJid.split('@')[0].replace(/\D/g, '');
       const pushName = msg.pushName?.trim() || null;
 
-      // Se o módulo de leitura de imagens estiver ativo para este usuário, analisa com IA multimodal
-      if (imageMsg && settings?.enableImageReading) {
+      // Se o módulo de leitura de imagens estiver ativo e permitido para este usuário, analisa com IA multimodal
+      if (imageMsg && settings?.enableImageReading && userPerms.vision) {
         try {
           const mediaBuffer = (await downloadMediaMessage(
             msg,
@@ -884,8 +907,8 @@ class UserWhatsAppSession {
         }
       }
 
-      // Se o módulo de transcrição de áudio estiver ativo para este usuário, transcreve com Gemini multimodal
-      if (audioMsg && settings?.enableAudioTranscription) {
+      // Se o módulo de transcrição de áudio estiver ativo e permitido para este usuário, transcreve com Gemini multimodal
+      if (audioMsg && settings?.enableAudioTranscription && userPerms.audio) {
         try {
           const mediaBuffer = (await downloadMediaMessage(
             msg,
@@ -1349,6 +1372,25 @@ class WhatsAppManager {
       this.sessions.set(userId, session);
     }
     return session;
+  }
+
+  public getSessionQuickStatus(userId: string): {
+    status: WhatsAppConnectionStatus;
+    connectedPhone: string | null;
+  } {
+    const session = this.sessions.get(userId);
+    if (!session) {
+      return { status: 'DISCONNECTED', connectedPhone: null };
+    }
+    return session.getQuickStatus();
+  }
+
+  public getConnectedCount(): number {
+    let count = 0;
+    for (const session of this.sessions.values()) {
+      if (session.isConnected()) count++;
+    }
+    return count;
   }
 
   public shutdownAll(): void {

@@ -77,6 +77,13 @@ Aplicação web full-stack **multi-usuário**, **100% gratuita e open-source**, 
 - Barra de **Uso da IA (Hoje / Mês)** em tempo real via WebSocket acima do perfil no menu lateral (com limite diário configurável em Configurações IA).
 - Menu lateral com rolagem vertical em zoom elevado, cabeçalho responsivo com **avatar clicável + dropdown da conta** em celular/zoom > 125%, **ícone/favicon oficial SVG** (`ZapFlow AI`) e tela completa de **Manual & Sobre** com templates prontos para copiar e FAQ.
 
+### 9. Painel Administrativo, Permissões por Módulo & Gestão de Licenças (`Administração`)
+- Disponível exclusivamente para contas `ADMIN` / `isOwner` (definida automaticamente via `OWNER_EMAIL`).
+- **Controle de Usuários:** criar, editar, promover/rebaixar Admin, aprovar, suspender (desconectando o WhatsApp imediatamente) ou excluir contas, além de redefinir senha e registrar observações internas.
+- **Permissões Granulares por Módulo (Front + Back protegidos por `requireModule`):** libera ou bloqueia individualmente *Conversas*, *Fluxos & Personas*, *Treinamento IA*, *Campanhas*, *Visão IA (Imagens)* e *Áudio IA (Transcrição)*.
+- **Indicadores Globais:** usuários ativos/suspensos/vencidos, WhatsApps conectados ao vivo, mensagens hoje/mês e consumo real de requisições e tokens de IA por usuário.
+- **Licenças & Política Global (`SystemConfig`):** gestão de **Plano** (`FREE`, `TRIAL`, `PRO`, `ENTERPRISE`), **Status da Licença** (`ACTIVE`, `TRIAL`, `EXPIRED`, `SUSPENDED`), **Validade** (atalhos `+30d`, `+90d`, `+1 ano`, `Sem validade`), limite diário de IA e opção de novos cadastros entrarem já ativos (padrão) ou aguardando aprovação.
+
 ---
 
 ## Estrutura do Projeto (Monorepo)

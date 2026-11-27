@@ -8,12 +8,156 @@ import { prisma } from '../db';
 export const SESSION_COOKIE_NAME = 'zapflow_session';
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 dias
 
+export interface UserModulePermissions {
+  conversations: boolean;
+  rules: boolean;
+  training: boolean;
+  campaigns: boolean;
+  vision: boolean;
+  audio: boolean;
+}
+
+export type ModulePermissionKey = keyof UserModulePermissions;
+
+export const DEFAULT_PERMISSIONS: UserModulePermissions = {
+  conversations: true,
+  rules: true,
+  training: true,
+  campaigns: true,
+  vision: true,
+  audio: true,
+};
+
 export interface AuthUser {
   id: string;
   email: string;
   name: string;
   avatarUrl: string | null;
   isOwner: boolean;
+  role: 'ADMIN' | 'USER';
+  status: 'ACTIVE' | 'PENDING' | 'SUSPENDED';
+  plan: 'FREE' | 'TRIAL' | 'PRO' | 'ENTERPRISE';
+  licenseStatus: 'ACTIVE' | 'TRIAL' | 'EXPIRED' | 'SUSPENDED';
+  licenseExpiresAt: string | null;
+  permissions: UserModulePermissions;
+}
+
+export function parsePermissions(raw?: string | null): UserModulePermissions {
+  if (!raw) return { ...DEFAULT_PERMISSIONS };
+  try {
+    const parsed = JSON.parse(raw) as Partial<UserModulePermissions>;
+    return {
+      conversations:
+        parsed.conversations !== undefined ? Boolean(parsed.conversations) : true,
+      rules: parsed.rules !== undefined ? Boolean(parsed.rules) : true,
+      training: parsed.training !== undefined ? Boolean(parsed.training) : true,
+      campaigns: parsed.campaigns !== undefined ? Boolean(parsed.campaigns) : true,
+      vision: parsed.vision !== undefined ? Boolean(parsed.vision) : true,
+      audio: parsed.audio !== undefined ? Boolean(parsed.audio) : true,
+    };
+  } catch {
+    return { ...DEFAULT_PERMISSIONS };
+  }
+}
+
+export function serializePermissions(
+  partial?: Partial<UserModulePermissions> | null
+): string {
+  const normalized: UserModulePermissions = {
+    conversations:
+      partial?.conversations !== undefined ? Boolean(partial.conversations) : true,
+    rules: partial?.rules !== undefined ? Boolean(partial.rules) : true,
+    training: partial?.training !== undefined ? Boolean(partial.training) : true,
+    campaigns: partial?.campaigns !== undefined ? Boolean(partial.campaigns) : true,
+    vision: partial?.vision !== undefined ? Boolean(partial.vision) : true,
+    audio: partial?.audio !== undefined ? Boolean(partial.audio) : true,
+  };
+  return JSON.stringify(normalized);
+}
+
+export function isUserAdmin(user: Pick<AuthUser, 'isOwner' | 'role'>): boolean {
+  return Boolean(user.isOwner || user.role === 'ADMIN');
+}
+
+export function getUserAccessBlockReason(
+  user: Pick<AuthUser, 'isOwner' | 'role' | 'status' | 'licenseStatus' | 'licenseExpiresAt'>
+): string | null {
+  if (isUserAdmin(user)) return null;
+  if (user.status === 'SUSPENDED') {
+    return 'Sua conta foi suspensa pelo administrador.';
+  }
+  if (user.status === 'PENDING') {
+    return 'Sua conta foi criada e está aguardando aprovação do administrador.';
+  }
+  if (user.licenseStatus === 'SUSPENDED') {
+    return 'Sua licença de uso está suspensa. Entre em contato com o administrador.';
+  }
+  if (user.licenseStatus === 'EXPIRED') {
+    return 'Sua licença de uso expirou. Entre em contato com o administrador para renovar.';
+  }
+  if (
+    user.licenseExpiresAt &&
+    new Date(user.licenseExpiresAt).getTime() < Date.now()
+  ) {
+    return 'Sua licença de uso venceu. Entre em contato com o administrador para renovar.';
+  }
+  return null;
+}
+
+export function formatAuthUser(dbUser: {
+  id: string;
+  email: string;
+  name: string;
+  avatarUrl: string | null;
+  isOwner: boolean;
+  role: string;
+  status: string;
+  plan: string;
+  licenseStatus: string;
+  licenseExpiresAt: Date | null;
+  permissionsJson: string;
+}): AuthUser {
+  const role: 'ADMIN' | 'USER' =
+    dbUser.isOwner || dbUser.role === 'ADMIN' ? 'ADMIN' : 'USER';
+  const permissions =
+    role === 'ADMIN'
+      ? { ...DEFAULT_PERMISSIONS }
+      : parsePermissions(dbUser.permissionsJson);
+  return {
+    id: dbUser.id,
+    email: dbUser.email,
+    name: dbUser.name,
+    avatarUrl: dbUser.avatarUrl,
+    isOwner: dbUser.isOwner,
+    role,
+    status: (dbUser.status || 'ACTIVE') as AuthUser['status'],
+    plan: (dbUser.plan || 'FREE') as AuthUser['plan'],
+    licenseStatus: (dbUser.licenseStatus || 'ACTIVE') as AuthUser['licenseStatus'],
+    licenseExpiresAt: dbUser.licenseExpiresAt
+      ? dbUser.licenseExpiresAt.toISOString()
+      : null,
+    permissions,
+  };
+}
+
+export async function getSystemConfig() {
+  let cfg = await prisma.systemConfig.findUnique({ where: { id: 'global' } });
+  if (!cfg) {
+    cfg = await prisma.systemConfig.create({
+      data: {
+        id: 'global',
+        requireAdminApproval: false,
+        defaultNewUserPlan: 'FREE',
+        defaultTrialDays: 0,
+      },
+    });
+  }
+  return {
+    requireAdminApproval: cfg.requireAdminApproval,
+    defaultNewUserPlan: (cfg.defaultNewUserPlan || 'FREE') as AuthUser['plan'],
+    defaultTrialDays: cfg.defaultTrialDays || 0,
+    defaultPermissions: parsePermissions(cfg.defaultPermissionsJson),
+  };
 }
 
 declare global {
@@ -181,9 +325,15 @@ export async function resolveUserFromToken(token: string): Promise<AuthUser | nu
       name: true,
       avatarUrl: true,
       isOwner: true,
+      role: true,
+      status: true,
+      plan: true,
+      licenseStatus: true,
+      licenseExpiresAt: true,
+      permissionsJson: true,
     },
   });
-  return user;
+  return user ? formatAuthUser(user) : null;
 }
 
 export async function requireAuth(
@@ -207,11 +357,56 @@ export async function requireAuth(
       return;
     }
 
+    const blockReason = getUserAccessBlockReason(user);
+    if (blockReason) {
+      res.status(403).json({ error: blockReason });
+      return;
+    }
+
     req.user = user;
     next();
   } catch {
     res.status(401).json({ error: 'Falha ao validar autenticação.' });
   }
+}
+
+export function requireAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  if (!req.user || !isUserAdmin(req.user)) {
+    res.status(403).json({
+      error: 'Acesso restrito a administradores da plataforma.',
+    });
+    return;
+  }
+  next();
+}
+
+const MODULE_LABELS: Record<ModulePermissionKey, string> = {
+  conversations: 'Conversas & Atendimento IA',
+  rules: 'Fluxos & Personas IA',
+  training: 'Treinamento IA',
+  campaigns: 'Campanhas & Disparos',
+  vision: 'Leitura de Imagens (Visão IA)',
+  audio: 'Transcrição de Áudios (Áudio IA)',
+};
+
+export function requireModule(moduleKey: ModulePermissionKey) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Autenticação necessária.' });
+      return;
+    }
+    if (isUserAdmin(req.user) || req.user.permissions[moduleKey]) {
+      next();
+      return;
+    }
+    res.status(403).json({
+      error: `O módulo "${MODULE_LABELS[moduleKey]}" não está liberado para sua conta. Solicite ao administrador.`,
+    });
+  };
 }
 
 export interface GoogleTokenProfile {

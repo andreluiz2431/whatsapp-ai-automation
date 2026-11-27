@@ -4,8 +4,12 @@ import { ensureUserDefaults, prisma } from '../db';
 import {
   clearSessionCookie,
   extractTokenFromHeaders,
+  formatAuthUser,
+  getSystemConfig,
+  getUserAccessBlockReason,
   hashPassword,
   resolveUserFromToken,
+  serializePermissions,
   setSessionCookie,
   signSessionToken,
   verifyGoogleIdToken,
@@ -39,6 +43,12 @@ authRouter.get('/me', async (req, res) => {
       res.status(401).json({ user: null });
       return;
     }
+    const blockReason = getUserAccessBlockReason(user);
+    if (blockReason) {
+      clearSessionCookie(res);
+      res.status(403).json({ user: null, error: blockReason });
+      return;
+    }
     res.json({ user });
   } catch {
     res.status(401).json({ user: null });
@@ -68,25 +78,40 @@ authRouter.post('/register', async (req, res) => {
       return;
     }
 
-    const userCount = await prisma.user.count();
+    const [userCount, sysCfg] = await Promise.all([
+      prisma.user.count(),
+      getSystemConfig(),
+    ]);
     const isOwner =
       config.ownerEmail ? email === config.ownerEmail : userCount === 0;
+    const initialStatus =
+      !isOwner && sysCfg.requireAdminApproval ? 'PENDING' : 'ACTIVE';
+    const initialPlan = isOwner ? 'ENTERPRISE' : sysCfg.defaultNewUserPlan;
+    const initialLicenseStatus =
+      !isOwner && initialPlan === 'TRIAL' ? 'TRIAL' : 'ACTIVE';
+    const initialExpiresAt =
+      !isOwner && sysCfg.defaultTrialDays > 0
+        ? new Date(Date.now() + sysCfg.defaultTrialDays * 24 * 60 * 60 * 1000)
+        : null;
 
-    const user = await prisma.user.create({
+    const createdUser = await prisma.user.create({
       data: {
         name,
         email,
         passwordHash: hashPassword(password),
         isOwner,
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        avatarUrl: true,
-        isOwner: true,
+        role: isOwner ? 'ADMIN' : 'USER',
+        status: initialStatus,
+        plan: initialPlan,
+        licenseStatus: initialLicenseStatus,
+        licenseExpiresAt: initialExpiresAt,
+        permissionsJson: serializePermissions(
+          isOwner ? undefined : sysCfg.defaultPermissions
+        ),
+        lastLoginAt: initialStatus === 'ACTIVE' ? new Date() : null,
       },
     });
+    const user = formatAuthUser(createdUser);
 
     await ensureUserDefaults(user.id, isOwner);
     if (isOwner) {
@@ -98,9 +123,17 @@ authRouter.post('/register', async (req, res) => {
     await logActivity(
       user.id,
       'SYSTEM',
-      `Conta criada para ${user.email}. Ambiente isolado pronto!`,
+      `Conta criada para ${user.email} (${initialStatus === 'PENDING' ? 'aguardando aprovação do administrador' : 'ativa e isolada'}).`,
       'SUCCESS'
     );
+
+    if (initialStatus === 'PENDING') {
+      res.status(403).json({
+        error:
+          'Conta criada! Aguarde a aprovação do administrador para acessar o painel.',
+      });
+      return;
+    }
 
     const token = signSessionToken(user.id);
     setSessionCookie(res, token);
@@ -117,31 +150,35 @@ authRouter.post('/login', async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
 
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
+    const dbUser = await prisma.user.findUnique({ where: { email } });
+    if (!dbUser || !dbUser.passwordHash || !verifyPassword(password, dbUser.passwordHash)) {
       res.status(401).json({ error: 'E-mail ou senha incorretos.' });
       return;
     }
 
-    await ensureUserDefaults(user.id, user.isOwner);
-    if (user.isOwner) {
-      const mig = await migrateLegacyDataForOwner(user.id);
+    const formatted = formatAuthUser(dbUser);
+    const blockReason = getUserAccessBlockReason(formatted);
+    if (blockReason) {
+      res.status(403).json({ error: blockReason });
+      return;
+    }
+
+    await prisma.user.update({
+      where: { id: dbUser.id },
+      data: { lastLoginAt: new Date() },
+    });
+
+    await ensureUserDefaults(dbUser.id, dbUser.isOwner);
+    if (dbUser.isOwner) {
+      const mig = await migrateLegacyDataForOwner(dbUser.id);
       if (mig.migratedSession) {
-        void whatsappManager.getSession(user.id).connect();
+        void whatsappManager.getSession(dbUser.id).connect();
       }
     }
-    const token = signSessionToken(user.id);
+    const token = signSessionToken(dbUser.id);
     setSessionCookie(res, token);
 
-    res.json({
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        avatarUrl: user.avatarUrl,
-        isOwner: user.isOwner,
-      },
-    });
+    res.json({ user: formatted });
   } catch (err) {
     res.status(500).json({
       error: err instanceof Error ? err.message : 'Erro ao fazer login.',
@@ -166,10 +203,22 @@ authRouter.post('/google', async (req, res) => {
     });
 
     if (!user) {
-      const userCount = await prisma.user.count();
+      const [userCount, sysCfg] = await Promise.all([
+        prisma.user.count(),
+        getSystemConfig(),
+      ]);
       const isOwner = config.ownerEmail
         ? profile.email === config.ownerEmail
         : userCount === 0;
+      const initialStatus =
+        !isOwner && sysCfg.requireAdminApproval ? 'PENDING' : 'ACTIVE';
+      const initialPlan = isOwner ? 'ENTERPRISE' : sysCfg.defaultNewUserPlan;
+      const initialLicenseStatus =
+        !isOwner && initialPlan === 'TRIAL' ? 'TRIAL' : 'ACTIVE';
+      const initialExpiresAt =
+        !isOwner && sysCfg.defaultTrialDays > 0
+          ? new Date(Date.now() + sysCfg.defaultTrialDays * 24 * 60 * 60 * 1000)
+          : null;
 
       user = await prisma.user.create({
         data: {
@@ -178,6 +227,15 @@ authRouter.post('/google', async (req, res) => {
           avatarUrl: profile.picture,
           googleSub: profile.sub,
           isOwner,
+          role: isOwner ? 'ADMIN' : 'USER',
+          status: initialStatus,
+          plan: initialPlan,
+          licenseStatus: initialLicenseStatus,
+          licenseExpiresAt: initialExpiresAt,
+          permissionsJson: serializePermissions(
+            isOwner ? undefined : sysCfg.defaultPermissions
+          ),
+          lastLoginAt: initialStatus === 'ACTIVE' ? new Date() : null,
         },
       });
       await ensureUserDefaults(user.id, isOwner);
@@ -194,12 +252,20 @@ authRouter.post('/google', async (req, res) => {
         'SUCCESS'
       );
     } else {
+      const preCheck = formatAuthUser(user);
+      const blockReason = getUserAccessBlockReason(preCheck);
+      if (blockReason) {
+        res.status(403).json({ error: blockReason });
+        return;
+      }
+
       user = await prisma.user.update({
         where: { id: user.id },
         data: {
           googleSub: profile.sub,
           name: user.name || profile.name,
           avatarUrl: profile.picture || user.avatarUrl,
+          lastLoginAt: new Date(),
         },
       });
       await ensureUserDefaults(user.id, user.isOwner);
@@ -211,18 +277,17 @@ authRouter.post('/google', async (req, res) => {
       }
     }
 
+    const formatted = formatAuthUser(user);
+    const blockReason = getUserAccessBlockReason(formatted);
+    if (blockReason) {
+      res.status(403).json({ error: blockReason });
+      return;
+    }
+
     const token = signSessionToken(user.id);
     setSessionCookie(res, token);
 
-    res.json({
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        avatarUrl: user.avatarUrl,
-        isOwner: user.isOwner,
-      },
-    });
+    res.json({ user: formatted });
   } catch (err) {
     res.status(401).json({
       error:

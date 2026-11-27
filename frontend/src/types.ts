@@ -1,9 +1,80 @@
+export interface UserModulePermissions {
+  conversations: boolean;
+  rules: boolean;
+  training: boolean;
+  campaigns: boolean;
+  vision: boolean;
+  audio: boolean;
+}
+
+export type UserRole = 'ADMIN' | 'USER';
+export type UserAccountStatus = 'ACTIVE' | 'PENDING' | 'SUSPENDED';
+export type UserPlan = 'FREE' | 'TRIAL' | 'PRO' | 'ENTERPRISE';
+export type LicenseStatus = 'ACTIVE' | 'TRIAL' | 'EXPIRED' | 'SUSPENDED';
+
 export interface AuthUser {
   id: string;
   email: string;
   name: string;
   avatarUrl: string | null;
   isOwner: boolean;
+  role: UserRole;
+  status: UserAccountStatus;
+  plan: UserPlan;
+  licenseStatus: LicenseStatus;
+  licenseExpiresAt: string | null;
+  permissions: UserModulePermissions;
+}
+
+export interface AdminUserRecord extends AuthUser {
+  adminNotes: string | null;
+  createdAt: string;
+  lastLoginAt: string | null;
+  whatsappStatus: WhatsAppStatus;
+  connectedPhone: string | null;
+  aiProvider: string;
+  geminiModel: string;
+  hasGeminiKey: boolean;
+  dailyAiRequestLimit: number;
+  stats: {
+    conversationsCount: number;
+    messagesToday: number;
+    messagesTotal: number;
+    aiRequestsToday: number;
+    aiTokensToday: number;
+    aiRequestsMonth: number;
+    aiTokensMonth: number;
+    campaignsCount: number;
+    trainingExamplesCount: number;
+  };
+}
+
+export interface AdminSystemConfig {
+  requireAdminApproval: boolean;
+  defaultNewUserPlan: UserPlan;
+  defaultTrialDays: number;
+  defaultPermissions: UserModulePermissions;
+}
+
+export interface AdminOverviewResponse {
+  summary: {
+    totalUsers: number;
+    activeUsers: number;
+    pendingUsers: number;
+    suspendedUsers: number;
+    expiredLicenses: number;
+    adminUsers: number;
+    connectedWhatsApps: number;
+    totalConversations: number;
+    messagesToday: number;
+    messagesMonth: number;
+    aiRequestsToday: number;
+    aiTokensToday: number;
+    aiRequestsMonth: number;
+    aiTokensMonth: number;
+  };
+  systemConfig: AdminSystemConfig;
+  users: AdminUserRecord[];
 }
 
 export type WhatsAppStatus =

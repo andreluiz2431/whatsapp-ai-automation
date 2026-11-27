@@ -20,9 +20,16 @@ import {
   TRAINING_FLEXIBILITY_OPTIONS,
 } from '../lib/aiStyleOptions';
 import { api } from '../lib/api';
-import { AiHealth, AppSettings } from '../types';
+import { AiHealth, AppSettings, AuthUser } from '../types';
 
-export function SettingsPage() {
+interface Props {
+  user?: AuthUser;
+}
+
+export function SettingsPage({ user }: Props) {
+  const isAdmin = Boolean(user?.isOwner || user?.role === 'ADMIN');
+  const canUseVision = isAdmin || user?.permissions?.vision !== false;
+  const canUseAudio = isAdmin || user?.permissions?.audio !== false;
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [aiHealth, setAiHealth] = useState<AiHealth | null>(null);
   const [geminiModels, setGeminiModels] = useState<string[]>([]);
@@ -662,10 +669,17 @@ export function SettingsPage() {
             </span>
           </div>
 
-          <label className="flex cursor-pointer items-start gap-3 text-sm">
+          {!canUseVision && (
+            <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-200">
+              Este módulo está bloqueado pelo administrador para a sua conta. Solicite liberação em seu plano.
+            </p>
+          )}
+
+          <label className={`flex items-start gap-3 text-sm ${canUseVision ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}>
             <input
               type="checkbox"
-              checked={settings.enableImageReading}
+              disabled={!canUseVision}
+              checked={canUseVision && settings.enableImageReading}
               onChange={(e) =>
                 setSettings({
                   ...settings,
@@ -823,10 +837,17 @@ export function SettingsPage() {
             </span>
           </div>
 
-          <label className="flex cursor-pointer items-start gap-3 text-sm">
+          {!canUseAudio && (
+            <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-200">
+              Este módulo está bloqueado pelo administrador para a sua conta. Solicite liberação em seu plano.
+            </p>
+          )}
+
+          <label className={`flex items-start gap-3 text-sm ${canUseAudio ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}>
             <input
               type="checkbox"
-              checked={settings.enableAudioTranscription}
+              disabled={!canUseAudio}
+              checked={canUseAudio && settings.enableAudioTranscription}
               onChange={(e) =>
                 setSettings({
                   ...settings,

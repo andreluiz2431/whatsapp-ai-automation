@@ -23,6 +23,30 @@ export async function ensureServerRecovery(): Promise<void> {
     where: { geminiModel: 'gemini-2.5-flash' },
     data: { geminiModel: config.geminiModel },
   });
+
+  // Garante que o dono (OWNER_EMAIL ou isOwner=true) tenha papel ADMIN ativo
+  if (config.ownerEmail) {
+    await prisma.user.updateMany({
+      where: { email: config.ownerEmail },
+      data: { isOwner: true, role: 'ADMIN', status: 'ACTIVE', licenseStatus: 'ACTIVE' },
+    });
+  }
+  await prisma.user.updateMany({
+    where: { isOwner: true },
+    data: { role: 'ADMIN', status: 'ACTIVE', licenseStatus: 'ACTIVE' },
+  });
+
+  // Provisiona configuração global de cadastros/licenças (novos usuários entram ATIVOS por padrão)
+  await prisma.systemConfig.upsert({
+    where: { id: 'global' },
+    update: {},
+    create: {
+      id: 'global',
+      requireAdminApproval: false,
+      defaultNewUserPlan: 'FREE',
+      defaultTrialDays: 0,
+    },
+  });
 }
 
 /**

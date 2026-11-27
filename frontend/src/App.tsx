@@ -3,6 +3,7 @@ import { OnboardingWizard } from './components/OnboardingWizard';
 import { NavTab, Sidebar } from './components/Sidebar';
 import { api } from './lib/api';
 import { socket } from './lib/socket';
+import { AdminPage } from './pages/AdminPage';
 import { AuthPage } from './pages/AuthPage';
 import { CampaignsPage } from './pages/CampaignsPage';
 import { ConversationsPage } from './pages/ConversationsPage';
@@ -60,13 +61,22 @@ export default function App() {
   );
 
   const refreshUnread = useCallback(async () => {
+    if (
+      user &&
+      !user.isOwner &&
+      user.role !== 'ADMIN' &&
+      user.permissions?.conversations === false
+    ) {
+      setUnreadTotal(0);
+      return;
+    }
     try {
       const convs = await api.get<Conversation[]>('/conversations');
       setUnreadTotal(convs.reduce((acc, c) => acc + (c.unreadCount || 0), 0));
     } catch {
       // ignora erro temporário
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     api
@@ -237,12 +247,15 @@ export default function App() {
             campaignRuntime={campaignRuntime}
           />
         )}
-        {activeTab === 'settings' && <SettingsPage />}
+        {activeTab === 'settings' && <SettingsPage user={user} />}
         {activeTab === 'guide' && (
           <GuidePage
             onNavigate={setActiveTab}
             onOpenOnboarding={() => setShowOnboarding(true)}
           />
+        )}
+        {activeTab === 'admin' && (user.isOwner || user.role === 'ADMIN') && (
+          <AdminPage currentUser={user} />
         )}
       </main>
 

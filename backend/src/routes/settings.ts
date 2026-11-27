@@ -11,6 +11,7 @@ import {
   testAiConnection,
   transcribeAudioWithAi,
 } from '../services/aiService';
+import { isUserAdmin } from '../services/authService';
 import { whatsappManager } from '../services/whatsappService';
 
 export const settingsRouter = Router();
@@ -64,6 +65,10 @@ settingsRouter.put('/', async (req, res) => {
       defaultBatchPauseMin,
     } = req.body;
 
+    const isAdmin = isUserAdmin(req.user!);
+    const allowVision = isAdmin || req.user!.permissions.vision;
+    const allowAudio = isAdmin || req.user!.permissions.audio;
+
     await getUserSettings(userId);
     const updated = await prisma.userSettings.update({
       where: { userId },
@@ -90,7 +95,7 @@ settingsRouter.put('/', async (req, res) => {
         ...(autoSummarizeConversations !== undefined
           ? { autoSummarizeConversations: Boolean(autoSummarizeConversations) }
           : {}),
-        ...(enableImageReading !== undefined
+        ...(enableImageReading !== undefined && allowVision
           ? { enableImageReading: Boolean(enableImageReading) }
           : {}),
         ...(geminiVisionModel !== undefined
@@ -99,7 +104,7 @@ settingsRouter.put('/', async (req, res) => {
         ...(imageAnalysisPrompt !== undefined
           ? { imageAnalysisPrompt: String(imageAnalysisPrompt).trim() }
           : {}),
-        ...(enableAudioTranscription !== undefined
+        ...(enableAudioTranscription !== undefined && allowAudio
           ? { enableAudioTranscription: Boolean(enableAudioTranscription) }
           : {}),
         ...(geminiAudioModel !== undefined
@@ -193,6 +198,13 @@ settingsRouter.post('/test-ai', async (req, res) => {
 settingsRouter.post('/test-vision', upload.single('image'), async (req, res) => {
   try {
     const userId = req.user!.id;
+    if (!isUserAdmin(req.user!) && !req.user!.permissions.vision) {
+      res.status(403).json({
+        ok: false,
+        error: 'O módulo Leitura de Imagens (Visão IA) não está liberado para sua conta.',
+      });
+      return;
+    }
     if (!req.file) {
       res.status(400).json({ ok: false, error: 'Envie uma imagem para testar.' });
       return;
@@ -217,6 +229,13 @@ settingsRouter.post('/test-vision', upload.single('image'), async (req, res) => 
 settingsRouter.post('/test-audio', upload.single('audio'), async (req, res) => {
   try {
     const userId = req.user!.id;
+    if (!isUserAdmin(req.user!) && !req.user!.permissions.audio) {
+      res.status(403).json({
+        ok: false,
+        error: 'O módulo Transcrição de Áudios (Áudio IA) não está liberado para sua conta.',
+      });
+      return;
+    }
     if (!req.file) {
       res.status(400).json({ ok: false, error: 'Envie um arquivo de áudio para testar.' });
       return;
