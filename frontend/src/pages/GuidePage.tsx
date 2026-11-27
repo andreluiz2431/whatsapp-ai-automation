@@ -470,7 +470,7 @@ export function GuidePage({ onNavigate }: Props) {
                   • <strong>Incorporar na Base:</strong> adicione conhecimento descoberto direto na Base de Conhecimento da regra com 1 clique.
                 </li>
                 <li>
-                  • <strong>Few-Shot Automático:</strong> exemplos ativos são injetados no prompt em todo atendimento real.
+                  • <strong>Few-Shot Automático &amp; Flexibilidade:</strong> exemplos ativos são injetados no prompt antes de cada resposta. Em <em>Configurações IA</em> (ou em cada <em>Tag/Fluxo</em>), escolha entre <strong>Fiel aos exemplos</strong>, <strong>Equilibrado</strong> ou <strong>Flexível e natural</strong> (mantém 100% da assertividade sem copiar texto ao pé da letra) e defina a tonalidade (Consultivo, Descontraído, Formal, Direto, Empático ou Comercial).
                 </li>
               </ul>
             </div>

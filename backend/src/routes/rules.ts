@@ -47,6 +47,10 @@ rulesRouter.post('/', async (req, res) => {
       contactName,
       objective,
       toneOfVoice,
+      responseTone,
+      trainingFlexibility,
+      responseLength,
+      emojiStyle,
       knowledgeBase,
       stopCondition,
     } = req.body;
@@ -116,6 +120,14 @@ rulesRouter.post('/', async (req, res) => {
         contactId: scope === 'CONTACT' ? resolvedContactId : null,
         objective: String(objective).trim(),
         toneOfVoice: String(toneOfVoice || '').trim(),
+        responseTone: responseTone ? String(responseTone).trim().toUpperCase() : null,
+        trainingFlexibility: trainingFlexibility
+          ? String(trainingFlexibility).trim().toUpperCase()
+          : null,
+        responseLength: responseLength
+          ? String(responseLength).trim().toUpperCase()
+          : null,
+        emojiStyle: emojiStyle ? String(emojiStyle).trim().toUpperCase() : null,
         knowledgeBase: String(knowledgeBase || '').trim(),
         stopCondition: String(stopCondition || '').trim(),
       },
@@ -154,6 +166,10 @@ rulesRouter.put('/:id', async (req, res) => {
       contactId,
       objective,
       toneOfVoice,
+      responseTone,
+      trainingFlexibility,
+      responseLength,
+      emojiStyle,
       knowledgeBase,
       stopCondition,
     } = req.body;
@@ -174,6 +190,34 @@ rulesRouter.put('/:id', async (req, res) => {
         ...(objective !== undefined ? { objective: String(objective).trim() } : {}),
         ...(toneOfVoice !== undefined
           ? { toneOfVoice: String(toneOfVoice).trim() }
+          : {}),
+        ...(responseTone !== undefined
+          ? {
+              responseTone: responseTone
+                ? String(responseTone).trim().toUpperCase()
+                : null,
+            }
+          : {}),
+        ...(trainingFlexibility !== undefined
+          ? {
+              trainingFlexibility: trainingFlexibility
+                ? String(trainingFlexibility).trim().toUpperCase()
+                : null,
+            }
+          : {}),
+        ...(responseLength !== undefined
+          ? {
+              responseLength: responseLength
+                ? String(responseLength).trim().toUpperCase()
+                : null,
+            }
+          : {}),
+        ...(emojiStyle !== undefined
+          ? {
+              emojiStyle: emojiStyle
+                ? String(emojiStyle).trim().toUpperCase()
+                : null,
+            }
           : {}),
         ...(knowledgeBase !== undefined
           ? { knowledgeBase: String(knowledgeBase).trim() }

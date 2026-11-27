@@ -46,6 +46,11 @@ model UserSettings {
   enableAudioTranscription   Boolean   @default(false)
   geminiAudioModel           String    @default("")
   audioTranscriptionPrompt   String    @default("Transcreva fielmente o áudio enviado no WhatsApp em português. Se houver informações importantes no tom ou contexto, adicione uma breve observação entre colchetes ao final.")
+  responseTone               String    @default("CONSULTATIVE") // CONSULTATIVE | CASUAL | FORMAL | DIRECT | EMPATHETIC | PERSUASIVE
+  trainingFlexibility        String    @default("BALANCED") // STRICT | BALANCED | FLEXIBLE
+  responseLength             String    @default("MEDIUM") // SHORT | MEDIUM | DETAILED
+  emojiStyle                 String    @default("LIGHT") // NONE | LIGHT | EXPRESSIVE
+  customStyleNote            String    @default("")
   dailyAiRequestLimit        Int       @default(250)
   defaultMinDelaySec         Int       @default(45)
   defaultMaxDelaySec         Int       @default(120)
@@ -151,6 +156,10 @@ model AiRule {
   contact               Contact?       @relation(fields: [contactId], references: [id], onDelete: SetNull)
   objective             String
   toneOfVoice           String
+  responseTone          String?        // null = herda de UserSettings
+  trainingFlexibility   String?        // null = herda de UserSettings
+  responseLength        String?        // null = herda de UserSettings
+  emojiStyle            String?        // null = herda de UserSettings
   knowledgeBase         String
   stopCondition         String
   campaigns             Campaign[]

@@ -3,12 +3,21 @@ import {
   Globe,
   Layers,
   Plus,
+  SlidersHorizontal,
   Tag as TagIcon,
   Trash2,
   User,
   X,
 } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
+import {
+  EMOJI_STYLE_OPTIONS,
+  getFlexibilityLabel,
+  getToneLabel,
+  RESPONSE_LENGTH_OPTIONS,
+  RESPONSE_TONE_OPTIONS,
+  TRAINING_FLEXIBILITY_OPTIONS,
+} from '../lib/aiStyleOptions';
 import { api } from '../lib/api';
 import { AiRule, Contact, Tag } from '../types';
 
@@ -54,6 +63,10 @@ export function RulesPage() {
     contactName: '',
     objective: '',
     toneOfVoice: '',
+    responseTone: '',
+    trainingFlexibility: '',
+    responseLength: '',
+    emojiStyle: '',
     knowledgeBase: '',
     stopCondition: '',
   });
@@ -88,7 +101,11 @@ export function RulesPage() {
       contactPhone: '',
       contactName: '',
       objective: '',
-      toneOfVoice: 'Cordial, natural, conciso e prestativo no estilo WhatsApp.',
+      toneOfVoice: '',
+      responseTone: '',
+      trainingFlexibility: '',
+      responseLength: '',
+      emojiStyle: '',
       knowledgeBase: '',
       stopCondition:
         'Se o cliente pedir para falar com humano, reclamar de pagamento ou quiser negociação especial.',
@@ -108,6 +125,10 @@ export function RulesPage() {
       contactName: rule.contact?.name || '',
       objective: rule.objective,
       toneOfVoice: rule.toneOfVoice,
+      responseTone: rule.responseTone || '',
+      trainingFlexibility: rule.trainingFlexibility || '',
+      responseLength: rule.responseLength || '',
+      emojiStyle: rule.emojiStyle || '',
       knowledgeBase: rule.knowledgeBase,
       stopCondition: rule.stopCondition,
     });
@@ -352,8 +373,20 @@ export function RulesPage() {
                     <p className="mt-0.5 text-slate-200">{rule.objective}</p>
                   </div>
                   <div>
-                    <span className="font-semibold text-slate-400">Tom de voz:</span>
-                    <p className="mt-0.5 text-slate-300">{rule.toneOfVoice}</p>
+                    <span className="font-semibold text-slate-400">
+                      Tonalidade &amp; Estilo:
+                    </span>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      <span className="rounded-md border border-slate-700 bg-slate-950 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
+                        Tom: {getToneLabel(rule.responseTone)}
+                      </span>
+                      <span className="rounded-md border border-slate-700 bg-slate-950 px-2 py-0.5 text-[10px] font-medium text-sky-300">
+                        Treino: {getFlexibilityLabel(rule.trainingFlexibility)}
+                      </span>
+                    </div>
+                    {rule.toneOfVoice && (
+                      <p className="mt-1 text-slate-300">{rule.toneOfVoice}</p>
+                    )}
                   </div>
                   {rule.knowledgeBase && (
                     <div>
@@ -505,16 +538,112 @@ export function RulesPage() {
               />
             </div>
 
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-400">
-                Tom de Voz
-              </label>
-              <input
-                value={form.toneOfVoice}
-                onChange={(e) => setForm({ ...form, toneOfVoice: e.target.value })}
-                placeholder="Ex: Consultivo, empático, descontraído e direto."
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2 text-sm text-white"
-              />
+            <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 text-xs font-bold text-white">
+                  <SlidersHorizontal className="h-3.5 w-3.5 text-emerald-400" />
+                  Tonalidade e Flexibilidade neste Fluxo / Tag
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  Deixe em &quot;Herdar Geral&quot; para usar Configurações IA
+                </span>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium text-slate-400">
+                    Tonalidade da Resposta
+                  </label>
+                  <select
+                    value={form.responseTone}
+                    onChange={(e) =>
+                      setForm({ ...form, responseTone: e.target.value })
+                    }
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                  >
+                    <option value="">Herdar das Configurações de IA (Geral)</option>
+                    {RESPONSE_TONE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium text-slate-400">
+                    Flexibilidade nos Exemplos de Treinamento
+                  </label>
+                  <select
+                    value={form.trainingFlexibility}
+                    onChange={(e) =>
+                      setForm({ ...form, trainingFlexibility: e.target.value })
+                    }
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                  >
+                    <option value="">Herdar das Configurações de IA (Geral)</option>
+                    {TRAINING_FLEXIBILITY_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label} ({opt.badge})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium text-slate-400">
+                    Tamanho das Mensagens
+                  </label>
+                  <select
+                    value={form.responseLength}
+                    onChange={(e) =>
+                      setForm({ ...form, responseLength: e.target.value })
+                    }
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                  >
+                    <option value="">Herdar das Configurações de IA (Geral)</option>
+                    {RESPONSE_LENGTH_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label} — {opt.shortDesc}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium text-slate-400">
+                    Uso de Emojis
+                  </label>
+                  <select
+                    value={form.emojiStyle}
+                    onChange={(e) =>
+                      setForm({ ...form, emojiStyle: e.target.value })
+                    }
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                  >
+                    <option value="">Herdar das Configurações de IA (Geral)</option>
+                    {EMOJI_STYLE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label} — {opt.shortDesc}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-[11px] font-medium text-slate-400">
+                  Nuances extras de Tom de Voz (opcional)
+                </label>
+                <input
+                  value={form.toneOfVoice}
+                  onChange={(e) =>
+                    setForm({ ...form, toneOfVoice: e.target.value })
+                  }
+                  placeholder="Ex: Faça apenas 1 pergunta por vez e use linguagem bem próxima."
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2 text-xs text-white"
+                />
+              </div>
             </div>
 
             <div>

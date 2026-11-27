@@ -62,6 +62,93 @@ export interface AiHealthStatus {
 
 const TRANSFER_TOKEN = '[TRANSFERIR_HUMANO]';
 
+const TONE_DIRECTIVES: Record<string, string> = {
+  CONSULTATIVE:
+    'Consultivo e profissional: seja claro, educado, prestativo e transmita confiança, orientando o cliente de forma natural.',
+  CASUAL:
+    'Descontraído e amigável: escreva de forma leve, próxima e natural como em uma conversa real de WhatsApp, mantendo respeito e clareza.',
+  FORMAL:
+    'Formal e corporativo: utilize linguagem polida, respeitosa e estruturada, evitando gírias e abreviações informais.',
+  DIRECT:
+    'Direto e objetivo: vá direto ao ponto com respostas enxutas, claras e sem rodeios desnecessários.',
+  EMPATHETIC:
+    'Empático e acolhedor: demonstre compreensão, paciência e cuidado genuíno antes de propor a solução.',
+  PERSUASIVE:
+    'Comercial e persuasivo: destaque benefícios práticos, responda objeções com segurança e conduza naturalmente para o próximo passo sem ser invasivo.',
+};
+
+const FLEXIBILITY_CONFIG: Record<
+  string,
+  { temperature: number; instruction: string }
+> = {
+  STRICT: {
+    temperature: 0.35,
+    instruction:
+      'Siga os exemplos de treinamento de forma rigorosa e fiel, mantendo redação, estrutura e abordagem muito próximas ao aprovado (adaptando apenas nome e pequenos detalhes do cliente).',
+  },
+  BALANCED: {
+    temperature: 0.65,
+    instruction:
+      'Use os exemplos de treinamento como referência forte de conteúdo, precisão e estilo, mas adapte naturalmente a construção das frases ao contexto atual da conversa.',
+  },
+  FLEXIBLE: {
+    temperature: 0.85,
+    instruction:
+      'Use os exemplos de treinamento APENAS como referência de assertividade, regras e fatos corretos — NÃO copie o texto ao pé da letra. Reescreva livremente de forma natural, humana e variada conforme o jeito que o cliente falou, preservando 100% da precisão das informações.',
+  },
+};
+
+const LENGTH_DIRECTIVES: Record<string, string> = {
+  SHORT:
+    'Tamanho da resposta: bem curto e objetivo (preferencialmente 1 a 2 frases rápidas).',
+  MEDIUM:
+    'Tamanho da resposta: equilibrado para WhatsApp (2 a 4 frases claras e fáceis de ler no celular).',
+  DETAILED:
+    'Tamanho da resposta: detalhado quando o assunto exigir, explicando bem os pontos de forma organizada e legível no WhatsApp.',
+};
+
+const EMOJI_DIRECTIVES: Record<string, string> = {
+  NONE: 'Emojis: NÃO utilize emojis nas respostas.',
+  LIGHT:
+    'Emojis: use com moderação (no máximo 1 ou 2 emojis discretos quando fizer sentido natural).',
+  EXPRESSIVE:
+    'Emojis: use emojis de forma calorosa e amigável para deixar a conversa próxima, sem atrapalhar a leitura.',
+};
+
+function resolveResponseStyle(rule: AiRule | null, settings: UserSettings) {
+  const toneKey = (
+    rule?.responseTone ||
+    settings.responseTone ||
+    'CONSULTATIVE'
+  ).toUpperCase();
+  const flexKey = (
+    rule?.trainingFlexibility ||
+    settings.trainingFlexibility ||
+    'BALANCED'
+  ).toUpperCase();
+  const lengthKey = (
+    rule?.responseLength ||
+    settings.responseLength ||
+    'MEDIUM'
+  ).toUpperCase();
+  const emojiKey = (
+    rule?.emojiStyle ||
+    settings.emojiStyle ||
+    'LIGHT'
+  ).toUpperCase();
+
+  const flex = FLEXIBILITY_CONFIG[flexKey] || FLEXIBILITY_CONFIG.BALANCED;
+
+  return {
+    toneDirective: TONE_DIRECTIVES[toneKey] || TONE_DIRECTIVES.CONSULTATIVE,
+    flexibilityInstruction: flex.instruction,
+    temperature: flex.temperature,
+    lengthDirective: LENGTH_DIRECTIVES[lengthKey] || LENGTH_DIRECTIVES.MEDIUM,
+    emojiDirective: EMOJI_DIRECTIVES[emojiKey] || EMOJI_DIRECTIVES.LIGHT,
+    customStyleNote: (settings.customStyleNote || '').trim(),
+  };
+}
+
 export async function getUserSettings(userId: string): Promise<UserSettings> {
   let settings = await prisma.userSettings.findUnique({ where: { userId } });
   if (!settings) {
@@ -147,25 +234,45 @@ async function getTrainingExamplesForRule(
 function buildSystemPrompt(
   rule: AiRule | null,
   contactName: string | null,
-  trainingExamples: AiTrainingExample[] = []
+  trainingExamples: AiTrainingExample[] = [],
+  settings?: UserSettings | null
 ): string {
   const objective =
     rule?.objective ||
     'Ajudar o cliente de forma educada, objetiva e prestativa.';
-  const tone =
-    rule?.toneOfVoice || 'Cordial, natural e direto (estilo WhatsApp).';
+  const ruleToneExtra = (rule?.toneOfVoice || '').trim();
   const knowledge =
     rule?.knowledgeBase || 'Nenhuma base adicional informada.';
   const stopCondition =
     rule?.stopCondition ||
     'Se o cliente pedir explicitamente para falar com um humano ou apresentar um problema crítico.';
 
+  const style = settings ? resolveResponseStyle(rule, settings) : null;
+
+  const toneBlockLines = [
+    style
+      ? `- Tonalidade principal: ${style.toneDirective}`
+      : `- Tonalidade: ${ruleToneExtra || 'Cordial, natural e direto (estilo WhatsApp).'}`,
+    style && ruleToneExtra
+      ? `- Nuances específicas deste fluxo: ${ruleToneExtra}`
+      : '',
+    style ? `- ${style.lengthDirective}` : '',
+    style ? `- ${style.emojiDirective}` : '',
+    style && style.customStyleNote
+      ? `- Diretriz geral de estilo da conta: ${style.customStyleNote}`
+      : '',
+  ].filter(Boolean);
+
+  const examplesInstruction =
+    style?.flexibilityInstruction ||
+    'Use estes exemplos reais e correções como referência prioritária de estilo e precisão:';
+
   const examplesBlock =
     trainingExamples.length > 0
       ? [
           '',
           '### EXEMPLOS DE ATENDIMENTO APROVADOS (TREINAMENTO)',
-          'Use estes exemplos reais e correções como referência prioritária de estilo e precisão:',
+          examplesInstruction,
           ...trainingExamples.map((ex, idx) =>
             [
               `Exemplo ${idx + 1}:`,
@@ -186,8 +293,8 @@ function buildSystemPrompt(
     '### OBJETIVO DA CONVERSA',
     objective,
     '',
-    '### TOM DE VOZ',
-    tone,
+    '### TOM DE VOZ E ESTILO DE RESPOSTA',
+    ...toneBlockLines,
     '',
     '### INFORMAÇÕES DE CONTEXTO / BASE DE CONHECIMENTO',
     knowledge,
@@ -198,7 +305,8 @@ function buildSystemPrompt(
     '',
     '### REGRAS OBRIGATÓRIAS DE RESPOSTA',
     '- Responda em português do Brasil (a menos que o cliente escreva em outro idioma).',
-    '- Mantenha as mensagens naturais, concisas e fáceis de ler no WhatsApp (evite blocos enormes de texto ou markdown excessivo).',
+    '- Mantenha as mensagens naturais e fáceis de ler no WhatsApp (evite blocos enormes de texto ou markdown excessivo).',
+    '- Mesmo ao variar ou adaptar a forma de escrever, mantenha 100% de assertividade nas informações, valores, prazos e regras da base de conhecimento e dos exemplos.',
     '- Não invente preços, promessas ou dados que não estejam na base de conhecimento.',
     `- Se a CONDIÇÃO DE PARADA for atingida, informe educadamente que um atendente humano dará continuidade e inclua exatamente a tag ${TRANSFER_TOKEN} no final da mensagem.`,
   ]
@@ -328,7 +436,8 @@ async function callGeminiSingleModel(
   apiKey: string,
   model: string,
   systemPrompt: string,
-  contents: Array<{ role: string; parts: Array<{ text: string }> }>
+  contents: Array<{ role: string; parts: Array<{ text: string }> }>,
+  temperature = 0.7
 ): Promise<
   | {
       ok: true;
@@ -352,7 +461,7 @@ async function callGeminiSingleModel(
       },
       contents,
       generationConfig: {
-        temperature: 0.7,
+        temperature,
         maxOutputTokens: 2048,
       },
     }),
@@ -412,7 +521,8 @@ async function callGemini(
   model: string,
   systemPrompt: string,
   turns: ChatTurn[],
-  feature: AiUsageFeature
+  feature: AiUsageFeature,
+  temperature = 0.7
 ): Promise<string> {
   if (!apiKey) {
     throw new Error(
@@ -435,7 +545,13 @@ async function callGemini(
   let lastStatus = 0;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const res = await callGeminiSingleModel(apiKey, model, systemPrompt, contents);
+    const res = await callGeminiSingleModel(
+      apiKey,
+      model,
+      systemPrompt,
+      contents,
+      temperature
+    );
     if (res.ok) {
       await recordAiUsage(
         userId,
@@ -480,7 +596,8 @@ async function callGemini(
         apiKey,
         fallbackModel,
         systemPrompt,
-        contents
+        contents,
+        temperature
       );
       if (res.ok) {
         await recordAiUsage(
@@ -512,7 +629,8 @@ async function callOllama(
   model: string,
   systemPrompt: string,
   turns: ChatTurn[],
-  feature: AiUsageFeature
+  feature: AiUsageFeature,
+  temperature = 0.7
 ): Promise<string> {
   const cleanUrl = baseUrl.replace(/\/+$/, '');
   const endpoint = `${cleanUrl}/api/chat`;
@@ -532,6 +650,7 @@ async function callOllama(
       model,
       messages,
       stream: false,
+      options: { temperature },
     }),
   });
 
@@ -568,7 +687,8 @@ async function invokeProvider(
   userId: string,
   systemPrompt: string,
   turns: ChatTurn[],
-  feature: AiUsageFeature = 'chat'
+  feature: AiUsageFeature = 'chat',
+  temperature = 0.7
 ): Promise<string> {
   const settings = await getUserSettings(userId);
   const provider = settings.aiProvider || 'gemini';
@@ -576,12 +696,28 @@ async function invokeProvider(
   if (provider === 'ollama') {
     const baseUrl = settings.ollamaBaseUrl || config.ollamaBaseUrl;
     const model = settings.ollamaModel || config.ollamaModel;
-    return callOllama(userId, baseUrl, model, systemPrompt, turns, feature);
+    return callOllama(
+      userId,
+      baseUrl,
+      model,
+      systemPrompt,
+      turns,
+      feature,
+      temperature
+    );
   }
 
   const apiKey = settings.geminiApiKey;
   const model = settings.geminiModel || config.geminiModel;
-  return callGemini(userId, apiKey, model, systemPrompt, turns, feature);
+  return callGemini(
+    userId,
+    apiKey,
+    model,
+    systemPrompt,
+    turns,
+    feature,
+    temperature
+  );
 }
 
 export async function generateConversationReply(
@@ -609,8 +745,17 @@ export async function generateConversationReply(
     conversation.activeRuleId
   );
 
-  const examples = await getTrainingExamplesForRule(userId, rule?.id);
-  const systemPrompt = buildSystemPrompt(rule, conversation.contact.name, examples);
+  const [settings, examples] = await Promise.all([
+    getUserSettings(userId),
+    getTrainingExamplesForRule(userId, rule?.id),
+  ]);
+  const style = resolveResponseStyle(rule, settings);
+  const systemPrompt = buildSystemPrompt(
+    rule,
+    conversation.contact.name,
+    examples,
+    settings
+  );
 
   const ordered = [...conversation.messages].reverse();
   const turns: ChatTurn[] = [];
@@ -634,7 +779,13 @@ export async function generateConversationReply(
     }
   }
 
-  const rawText = await invokeProvider(userId, systemPrompt, turns);
+  const rawText = await invokeProvider(
+    userId,
+    systemPrompt,
+    turns,
+    'chat',
+    style.temperature
+  );
   const shouldTransferToHuman = rawText.includes(TRANSFER_TOKEN);
   const cleanText = rawText.replace(TRANSFER_TOKEN, '').trim();
 
@@ -1299,10 +1450,25 @@ export async function simulateTrainingChat(
     });
   }
 
-  const examples = await getTrainingExamplesForRule(userId, rule?.id);
-  const systemPrompt = buildSystemPrompt(rule, 'Cliente (Simulação)', examples);
+  const [settings, examples] = await Promise.all([
+    getUserSettings(userId),
+    getTrainingExamplesForRule(userId, rule?.id),
+  ]);
+  const style = resolveResponseStyle(rule, settings);
+  const systemPrompt = buildSystemPrompt(
+    rule,
+    'Cliente (Simulação)',
+    examples,
+    settings
+  );
 
-  const rawText = await invokeProvider(userId, systemPrompt, turns);
+  const rawText = await invokeProvider(
+    userId,
+    systemPrompt,
+    turns,
+    'training',
+    style.temperature
+  );
   const shouldTransferToHuman = rawText.includes(TRANSFER_TOKEN);
   const cleanText = rawText.replace(TRANSFER_TOKEN, '').trim();
 

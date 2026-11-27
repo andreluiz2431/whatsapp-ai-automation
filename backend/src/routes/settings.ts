@@ -52,6 +52,11 @@ settingsRouter.put('/', async (req, res) => {
       enableAudioTranscription,
       geminiAudioModel,
       audioTranscriptionPrompt,
+      responseTone,
+      trainingFlexibility,
+      responseLength,
+      emojiStyle,
+      customStyleNote,
       dailyAiRequestLimit,
       defaultMinDelaySec,
       defaultMaxDelaySec,
@@ -104,6 +109,24 @@ settingsRouter.put('/', async (req, res) => {
           ? {
               audioTranscriptionPrompt: String(audioTranscriptionPrompt).trim(),
             }
+          : {}),
+        ...(responseTone !== undefined
+          ? { responseTone: String(responseTone).trim().toUpperCase() || 'CONSULTATIVE' }
+          : {}),
+        ...(trainingFlexibility !== undefined
+          ? {
+              trainingFlexibility:
+                String(trainingFlexibility).trim().toUpperCase() || 'BALANCED',
+            }
+          : {}),
+        ...(responseLength !== undefined
+          ? { responseLength: String(responseLength).trim().toUpperCase() || 'MEDIUM' }
+          : {}),
+        ...(emojiStyle !== undefined
+          ? { emojiStyle: String(emojiStyle).trim().toUpperCase() || 'LIGHT' }
+          : {}),
+        ...(customStyleNote !== undefined
+          ? { customStyleNote: String(customStyleNote).trim() }
           : {}),
         ...(dailyAiRequestLimit !== undefined
           ? {

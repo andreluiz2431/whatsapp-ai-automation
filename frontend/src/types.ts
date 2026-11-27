@@ -94,6 +94,18 @@ export interface Contact {
   tags?: Array<{ tag: Tag }>;
 }
 
+export type ResponseTone =
+  | 'CONSULTATIVE'
+  | 'CASUAL'
+  | 'FORMAL'
+  | 'DIRECT'
+  | 'EMPATHETIC'
+  | 'PERSUASIVE';
+
+export type TrainingFlexibility = 'STRICT' | 'BALANCED' | 'FLEXIBLE';
+export type ResponseLength = 'SHORT' | 'MEDIUM' | 'DETAILED';
+export type EmojiStyle = 'NONE' | 'LIGHT' | 'EXPRESSIVE';
+
 export interface AiRule {
   id: string;
   name: string;
@@ -105,6 +117,10 @@ export interface AiRule {
   contact?: Contact | null;
   objective: string;
   toneOfVoice: string;
+  responseTone?: ResponseTone | null;
+  trainingFlexibility?: TrainingFlexibility | null;
+  responseLength?: ResponseLength | null;
+  emojiStyle?: EmojiStyle | null;
   knowledgeBase: string;
   stopCondition: string;
   updatedAt: string;
@@ -215,6 +231,11 @@ export interface AppSettings {
   enableAudioTranscription: boolean;
   geminiAudioModel: string;
   audioTranscriptionPrompt: string;
+  responseTone: ResponseTone;
+  trainingFlexibility: TrainingFlexibility;
+  responseLength: ResponseLength;
+  emojiStyle: EmojiStyle;
+  customStyleNote: string;
   dailyAiRequestLimit: number;
   defaultMinDelaySec: number;
   defaultMaxDelaySec: number;
