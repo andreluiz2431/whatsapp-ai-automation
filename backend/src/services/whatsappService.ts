@@ -50,17 +50,135 @@ export function normalizePhoneAndJid(raw: string): {
   };
 }
 
+/**
+ * Desembrulha mensagens encapsuladas pelo WhatsApp / WhatsApp Business
+ * (Mensagens Temporárias / ephemeralMessage, visualização única, legendas de documentos, edições, etc.).
+ */
+function unwrapMessage(
+  msg: proto.IMessage | null | undefined
+): proto.IMessage | null | undefined {
+  let current = msg;
+  for (let depth = 0; depth < 6 && current; depth++) {
+    if (current.ephemeralMessage?.message) {
+      current = current.ephemeralMessage.message;
+      continue;
+    }
+    if (current.viewOnceMessage?.message) {
+      current = current.viewOnceMessage.message;
+      continue;
+    }
+    if (current.viewOnceMessageV2?.message) {
+      current = current.viewOnceMessageV2.message;
+      continue;
+    }
+    if (current.viewOnceMessageV2Extension?.message) {
+      current = current.viewOnceMessageV2Extension.message;
+      continue;
+    }
+    if (current.documentWithCaptionMessage?.message) {
+      current = current.documentWithCaptionMessage.message;
+      continue;
+    }
+    if (current.editedMessage?.message) {
+      current = current.editedMessage.message;
+      continue;
+    }
+    if (current.deviceSentMessage?.message) {
+      current = current.deviceSentMessage.message;
+      continue;
+    }
+    break;
+  }
+  return current;
+}
+
 function extractTextFromMessage(msg: proto.IMessage | null | undefined): string {
-  if (!msg) return '';
-  if (msg.conversation) return msg.conversation;
-  if (msg.extendedTextMessage?.text) return msg.extendedTextMessage.text;
-  if (msg.imageMessage?.caption) return `[Imagem] ${msg.imageMessage.caption}`;
-  if (msg.videoMessage?.caption) return `[Vídeo] ${msg.videoMessage.caption}`;
-  if (msg.documentMessage?.caption)
-    return `[Documento] ${msg.documentMessage.caption}`;
-  if (msg.buttonsResponseMessage?.selectedDisplayText)
-    return msg.buttonsResponseMessage.selectedDisplayText;
-  if (msg.listResponseMessage?.title) return msg.listResponseMessage.title;
+  const m = unwrapMessage(msg);
+  if (!m) return '';
+
+  if (m.conversation) return m.conversation;
+  if (m.extendedTextMessage?.text) return m.extendedTextMessage.text;
+  if (m.imageMessage?.caption) return `[Imagem] ${m.imageMessage.caption}`;
+  if (m.videoMessage) {
+    return m.videoMessage.caption
+      ? `[Vídeo] ${m.videoMessage.caption}`
+      : '[Vídeo enviado]';
+  }
+  if (m.documentMessage) {
+    const fileLabel = m.documentMessage.fileName || m.documentMessage.title || '';
+    const cap = m.documentMessage.caption || '';
+    if (cap) return `[Documento${fileLabel ? `: ${fileLabel}` : ''}] ${cap}`;
+    return `[Documento${fileLabel ? `: ${fileLabel}` : ' enviado'}]`;
+  }
+  if (m.stickerMessage) return '[Figurinha enviada]';
+  if (m.contactMessage) {
+    return `[Contato compartilhado: ${m.contactMessage.displayName || 'Contato'}]`;
+  }
+  if (m.locationMessage) {
+    const loc = [m.locationMessage.name, m.locationMessage.address]
+      .filter(Boolean)
+      .join(' - ');
+    return loc ? `[Localização: ${loc}]` : '[Localização enviada]';
+  }
+
+  // Mensagens do WhatsApp Business (templates, botões, listas e mensagens interativas)
+  if (m.buttonsMessage) {
+    return [m.buttonsMessage.contentText, m.buttonsMessage.footerText]
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (m.buttonsResponseMessage?.selectedDisplayText) {
+    return m.buttonsResponseMessage.selectedDisplayText;
+  }
+  if (m.listMessage) {
+    return [m.listMessage.title, m.listMessage.description, m.listMessage.footerText]
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (m.listResponseMessage) {
+    return [
+      m.listResponseMessage.title,
+      m.listResponseMessage.description,
+    ]
+      .filter(Boolean)
+      .join(' - ');
+  }
+  if (m.templateMessage) {
+    const hydrated =
+      m.templateMessage.hydratedTemplate ||
+      m.templateMessage.hydratedFourRowTemplate;
+    if (hydrated) {
+      return [
+        hydrated.hydratedTitleText,
+        hydrated.hydratedContentText,
+        hydrated.hydratedFooterText,
+      ]
+        .filter(Boolean)
+        .join('\n');
+    }
+  }
+  if (m.templateButtonReplyMessage?.selectedDisplayText) {
+    return m.templateButtonReplyMessage.selectedDisplayText;
+  }
+  if (m.interactiveMessage) {
+    return [
+      m.interactiveMessage.header?.title,
+      m.interactiveMessage.body?.text,
+      m.interactiveMessage.footer?.text,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (m.interactiveResponseMessage?.body?.text) {
+    return m.interactiveResponseMessage.body.text;
+  }
+  if (m.pollCreationMessage?.name) {
+    return `[Enquete] ${m.pollCreationMessage.name}`;
+  }
+  if (m.pollCreationMessageV3?.name) {
+    return `[Enquete] ${m.pollCreationMessageV3.name}`;
+  }
+
   return '';
 }
 
@@ -425,17 +543,31 @@ class UserWhatsAppSession {
 
   private async handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> {
     try {
-      const remoteJid = msg.key?.remoteJid;
-      if (!remoteJid) return;
+      const rawRemoteJid = msg.key?.remoteJid;
+      if (!rawRemoteJid) return;
       if (msg.key.fromMe) return;
-      if (remoteJid === 'status@broadcast' || remoteJid.endsWith('@g.us')) {
+      if (rawRemoteJid === 'status@broadcast' || rawRemoteJid.endsWith('@g.us')) {
         return;
       }
 
-      const imageMsg = msg.message?.imageMessage;
-      const audioMsg = msg.message?.audioMessage;
+      // Resolve JID real em contas Business/multi-device que enviam @lid com remoteJidAlt/senderPn
+      const keyAny = msg.key as unknown as {
+        remoteJidAlt?: string;
+        senderPn?: string;
+      };
+      let remoteJid = rawRemoteJid;
+      if (rawRemoteJid.endsWith('@lid')) {
+        const alt = keyAny.remoteJidAlt || keyAny.senderPn;
+        if (alt && alt.endsWith('@s.whatsapp.net')) {
+          remoteJid = alt;
+        }
+      }
+
+      const unwrapped = unwrapMessage(msg.message);
+      const imageMsg = unwrapped?.imageMessage;
+      const audioMsg = unwrapped?.audioMessage;
       const caption = imageMsg?.caption?.trim() || '';
-      let body = extractTextFromMessage(msg.message).trim();
+      let body = extractTextFromMessage(unwrapped).trim();
       let mediaType: string | null = null;
       let imageAnalysis: string | null = null;
       let audioTranscript: string | null = null;
@@ -453,7 +585,21 @@ class UserWhatsAppSession {
           : `[Áudio enviado${secs}]`;
       }
 
-      if (!body) return;
+      if (!body) {
+        const keys = Object.keys(msg.message || {}).filter(
+          (k) =>
+            k !== 'messageContextInfo' &&
+            k !== 'senderKeyDistributionMessage' &&
+            k !== 'protocolMessage' &&
+            k !== 'reactionMessage'
+        );
+        if (keys.length > 0) {
+          console.log(
+            `[WhatsApp] Mensagem ignorada de ${remoteJid} (tipos não textuais: ${keys.join(', ')})`
+          );
+        }
+        return;
+      }
 
       const settings = await prisma.userSettings.findUnique({
         where: { userId: this.userId },
