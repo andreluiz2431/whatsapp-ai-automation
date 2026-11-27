@@ -318,6 +318,31 @@ export interface Campaign {
   items?: CampaignItem[];
 }
 
+export interface BusinessHoursInterval {
+  start: string;
+  end: string;
+}
+
+export interface BusinessHoursDay {
+  enabled: boolean;
+  intervals: BusinessHoursInterval[];
+}
+
+export type WeeklyBusinessHours = Record<string, BusinessHoursDay>;
+export type BusinessHoursMode = 'ACTIVE_DURING_HOURS' | 'INVERSE_AFTER_HOURS';
+export type OffHoursAction = 'PAUSE' | 'SEND_MESSAGE';
+
+export interface BusinessHoursStatus {
+  enabled: boolean;
+  aiAllowedNow: boolean;
+  isInsideConfiguredIntervals: boolean;
+  mode: BusinessHoursMode;
+  offHoursAction: OffHoursAction;
+  currentLocalTime: string;
+  dayLabel: string;
+  summary: string;
+}
+
 export interface AppSettings {
   id: string;
   userId?: string;
@@ -345,4 +370,11 @@ export interface AppSettings {
   defaultMaxDelaySec: number;
   defaultBatchSize: number;
   defaultBatchPauseMin: number;
+  businessHoursEnabled: boolean;
+  businessHoursTimezone: string;
+  businessHoursMode: BusinessHoursMode;
+  businessHoursScheduleJson: string;
+  offHoursAction: OffHoursAction;
+  offHoursMessage: string;
+  offHoursCooldownMin: number;
 }

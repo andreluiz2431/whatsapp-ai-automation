@@ -73,6 +73,13 @@ model UserSettings {
   defaultMaxDelaySec         Int       @default(120)
   defaultBatchSize           Int       @default(20)
   defaultBatchPauseMin       Int       @default(5)
+  businessHoursEnabled       Boolean   @default(false)
+  businessHoursTimezone      String    @default("America/Sao_Paulo")
+  businessHoursMode          String    @default("ACTIVE_DURING_HOURS") // ACTIVE_DURING_HOURS | INVERSE_AFTER_HOURS
+  businessHoursScheduleJson  String    @default("{\"0\":{\"enabled\":false,\"intervals\":[]},\"1\":{\"enabled\":true,\"intervals\":[{\"start\":\"08:00\",\"end\":\"18:00\"}]},\"2\":{\"enabled\":true,\"intervals\":[{\"start\":\"08:00\",\"end\":\"18:00\"}]},\"3\":{\"enabled\":true,\"intervals\":[{\"start\":\"08:00\",\"end\":\"18:00\"}]},\"4\":{\"enabled\":true,\"intervals\":[{\"start\":\"08:00\",\"end\":\"18:00\"}]},\"5\":{\"enabled\":true,\"intervals\":[{\"start\":\"08:00\",\"end\":\"18:00\"}]},\"6\":{\"enabled\":false,\"intervals\":[{\"start\":\"09:00\",\"end\":\"13:00\"}]}}")
+  offHoursAction             String    @default("PAUSE") // PAUSE | SEND_MESSAGE
+  offHoursMessage            String    @default("Olá {{primeiro_nome}}! No momento estamos fora do nosso horário de atendimento (Seg a Sex, das 08h às 18h). Sua mensagem foi registrada e retornaremos assim que possível!")
+  offHoursCooldownMin        Int       @default(60)
   lastDailySummary           String?
   lastDailySummaryAt         DateTime?
   updatedAt                  DateTime  @updatedAt

@@ -510,6 +510,9 @@ export function GuidePage({ onNavigate, onOpenOnboarding }: Props) {
                   • <strong>Transcrição de Áudios (Áudio IA):</strong> ative em <em>Configurações IA</em> para transcrever mensagens de voz do WhatsApp (OGG/Opus) nativamente no Gemini Free Tier e responder entendendo tudo o que foi falado.
                 </li>
                 <li>
+                  • <strong>Horário de Trabalho &amp; Atendimento Inverso:</strong> em <em>Configurações IA</em>, defina dias e múltiplos intervalos (incluindo pausas de almoço), escolha pausar silenciosamente ou enviar mensagem específica (ex: horário ou contato do NOC) e ative o modo <em>Atendimento Inverso</em> se quiser a IA apenas fora do expediente humano.
+                </li>
+                <li>
                   • <strong>Monitoramento ao vivo:</strong> a barra <em>Uso da IA (Hoje)</em> acima da sua conta mostra requisições, tokens reais, imagens e áudios processados em tempo real.
                 </li>
               </ul>

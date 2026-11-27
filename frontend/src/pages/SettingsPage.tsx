@@ -1,16 +1,21 @@
 import {
   CheckCircle2,
+  Clock,
   Cpu,
   ExternalLink,
   Eye,
   FlaskConical,
   Image as ImageIcon,
   Mic,
+  Moon,
+  Plus,
   Save,
   ShieldAlert,
   SlidersHorizontal,
   Sparkles,
+  Sun,
   Terminal,
+  Trash2,
 } from 'lucide-react';
 import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
 import {
@@ -20,7 +25,77 @@ import {
   TRAINING_FLEXIBILITY_OPTIONS,
 } from '../lib/aiStyleOptions';
 import { api } from '../lib/api';
-import { AiHealth, AppSettings, AuthUser } from '../types';
+import {
+  AiHealth,
+  AppSettings,
+  AuthUser,
+  BusinessHoursStatus,
+  WeeklyBusinessHours,
+} from '../types';
+
+const DAY_LIST: Array<{ key: string; label: string; short: string }> = [
+  { key: '1', label: 'Segunda-feira', short: 'Seg' },
+  { key: '2', label: 'Terça-feira', short: 'Ter' },
+  { key: '3', label: 'Quarta-feira', short: 'Qua' },
+  { key: '4', label: 'Quinta-feira', short: 'Qui' },
+  { key: '5', label: 'Sexta-feira', short: 'Sex' },
+  { key: '6', label: 'Sábado', short: 'Sáb' },
+  { key: '0', label: 'Domingo', short: 'Dom' },
+];
+
+const DEFAULT_SCHEDULE: WeeklyBusinessHours = {
+  '0': { enabled: false, intervals: [] },
+  '1': { enabled: true, intervals: [{ start: '08:00', end: '18:00' }] },
+  '2': { enabled: true, intervals: [{ start: '08:00', end: '18:00' }] },
+  '3': { enabled: true, intervals: [{ start: '08:00', end: '18:00' }] },
+  '4': { enabled: true, intervals: [{ start: '08:00', end: '18:00' }] },
+  '5': { enabled: true, intervals: [{ start: '08:00', end: '18:00' }] },
+  '6': { enabled: false, intervals: [{ start: '09:00', end: '13:00' }] },
+};
+
+const TIMEZONE_OPTIONS = [
+  { value: 'America/Sao_Paulo', label: 'Brasília / São Paulo (UTC-3)' },
+  { value: 'America/Manaus', label: 'Manaus / Cuiabá (UTC-4)' },
+  { value: 'America/Rio_Branco', label: 'Rio Branco / Acre (UTC-5)' },
+  { value: 'America/Noronha', label: 'Fernando de Noronha (UTC-2)' },
+  { value: 'Europe/Lisbon', label: 'Lisboa / Portugal' },
+  { value: 'UTC', label: 'UTC (Horário Universal)' },
+];
+
+const OFF_HOURS_TEMPLATES = [
+  {
+    label: 'Horário Comercial',
+    text: 'Olá {{primeiro_nome}}! No momento estamos fora do nosso horário de atendimento (Seg a Sex, das 08h às 18h). Sua mensagem foi registrada e retornaremos assim que o expediente iniciar!',
+  },
+  {
+    label: 'Plantão / NOC',
+    text: 'Olá {{primeiro_nome}}! Nosso atendimento regular está encerrado neste horário. Para emergências ou incidentes críticos, acione nosso plantão NOC pelo telefone/WhatsApp (11) 99999-0000 ou e-mail noc@suaempresa.com. Assuntos comuns serão respondidos no próximo dia útil.',
+  },
+  {
+    label: 'Pausa / Almoço',
+    text: 'Olá {{primeiro_nome}}! Estamos em pausa temporária agora e voltamos em breve. Pode deixar sua dúvida aqui que já te respondemos assim que retornarmos!',
+  },
+];
+
+function parseScheduleSafe(raw?: string | null): WeeklyBusinessHours {
+  if (!raw) return structuredClone(DEFAULT_SCHEDULE);
+  try {
+    const parsed = JSON.parse(raw) as WeeklyBusinessHours;
+    const out: WeeklyBusinessHours = {};
+    for (const d of DAY_LIST) {
+      const item = parsed[d.key];
+      out[d.key] = item
+        ? {
+            enabled: Boolean(item.enabled),
+            intervals: Array.isArray(item.intervals) ? item.intervals : [],
+          }
+        : structuredClone(DEFAULT_SCHEDULE[d.key]);
+    }
+    return out;
+  } catch {
+    return structuredClone(DEFAULT_SCHEDULE);
+  }
+}
 
 interface Props {
   user?: AuthUser;
@@ -32,6 +107,11 @@ export function SettingsPage({ user }: Props) {
   const canUseAudio = isAdmin || user?.permissions?.audio !== false;
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [aiHealth, setAiHealth] = useState<AiHealth | null>(null);
+  const [businessHoursStatus, setBusinessHoursStatus] =
+    useState<BusinessHoursStatus | null>(null);
+  const [schedule, setSchedule] = useState<WeeklyBusinessHours>(() =>
+    structuredClone(DEFAULT_SCHEDULE)
+  );
   const [geminiModels, setGeminiModels] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [savedBanner, setSavedBanner] = useState(false);
@@ -58,11 +138,15 @@ export function SettingsPage({ user }: Props) {
 
   const loadSettings = async () => {
     try {
-      const data = await api.get<{ settings: AppSettings; aiHealth: AiHealth }>(
-        '/settings'
-      );
+      const data = await api.get<{
+        settings: AppSettings;
+        aiHealth: AiHealth;
+        businessHoursStatus?: BusinessHoursStatus;
+      }>('/settings');
       setSettings(data.settings);
       setAiHealth(data.aiHealth);
+      setBusinessHoursStatus(data.businessHoursStatus || null);
+      setSchedule(parseScheduleSafe(data.settings.businessHoursScheduleJson));
     } catch {
       // ignora
     }
@@ -84,14 +168,106 @@ export function SettingsPage({ user }: Props) {
 
   const persistSettings = async (): Promise<boolean> => {
     if (!settings) return false;
-    const res = await api.put<{ settings: AppSettings; aiHealth: AiHealth }>(
-      '/settings',
-      settings
-    );
+    const payload: AppSettings = {
+      ...settings,
+      businessHoursScheduleJson: JSON.stringify(schedule),
+    };
+    const res = await api.put<{
+      settings: AppSettings;
+      aiHealth: AiHealth;
+      businessHoursStatus?: BusinessHoursStatus;
+    }>('/settings', payload);
     setSettings(res.settings);
     setAiHealth(res.aiHealth);
+    setBusinessHoursStatus(res.businessHoursStatus || null);
+    setSchedule(parseScheduleSafe(res.settings.businessHoursScheduleJson));
     void loadGeminiModels();
     return true;
+  };
+
+  const applySchedulePreset = (preset: 'commercial' | 'lunch' | 'saturday') => {
+    const next: WeeklyBusinessHours = structuredClone(DEFAULT_SCHEDULE);
+    const workDays =
+      preset === 'saturday' ? ['1', '2', '3', '4', '5', '6'] : ['1', '2', '3', '4', '5'];
+    for (const d of DAY_LIST) {
+      if (workDays.includes(d.key)) {
+        next[d.key] = {
+          enabled: true,
+          intervals:
+            preset === 'lunch'
+              ? [
+                  { start: '08:00', end: '12:00' },
+                  { start: '13:30', end: '18:00' },
+                ]
+              : preset === 'saturday' && d.key === '6'
+                ? [{ start: '09:00', end: '13:00' }]
+                : [{ start: '08:00', end: '18:00' }],
+        };
+      } else {
+        next[d.key] = { enabled: false, intervals: [] };
+      }
+    }
+    setSchedule(next);
+  };
+
+  const toggleDayEnabled = (dayKey: string) => {
+    setSchedule((prev) => {
+      const cur = prev[dayKey] || { enabled: false, intervals: [] };
+      const nextEnabled = !cur.enabled;
+      return {
+        ...prev,
+        [dayKey]: {
+          enabled: nextEnabled,
+          intervals:
+            nextEnabled && cur.intervals.length === 0
+              ? [{ start: '08:00', end: '18:00' }]
+              : cur.intervals,
+        },
+      };
+    });
+  };
+
+  const updateDayInterval = (
+    dayKey: string,
+    index: number,
+    field: 'start' | 'end',
+    value: string
+  ) => {
+    setSchedule((prev) => {
+      const cur = prev[dayKey] || { enabled: true, intervals: [] };
+      const nextIntervals = cur.intervals.map((iv, idx) =>
+        idx === index ? { ...iv, [field]: value } : iv
+      );
+      return { ...prev, [dayKey]: { ...cur, intervals: nextIntervals } };
+    });
+  };
+
+  const addDayInterval = (dayKey: string) => {
+    setSchedule((prev) => {
+      const cur = prev[dayKey] || { enabled: true, intervals: [] };
+      if (cur.intervals.length >= 4) return prev;
+      return {
+        ...prev,
+        [dayKey]: {
+          enabled: true,
+          intervals: [...cur.intervals, { start: '13:30', end: '18:00' }],
+        },
+      };
+    });
+  };
+
+  const removeDayInterval = (dayKey: string, index: number) => {
+    setSchedule((prev) => {
+      const cur = prev[dayKey] || { enabled: true, intervals: [] };
+      const nextIntervals = cur.intervals.filter((_, idx) => idx !== index);
+      return {
+        ...prev,
+        [dayKey]: {
+          enabled: nextIntervals.length > 0 ? cur.enabled : false,
+          intervals: nextIntervals,
+        },
+      };
+    });
   };
 
   const handleSave = async (e: FormEvent) => {
@@ -649,6 +825,397 @@ export function SettingsPage({ user }: Props) {
               </p>
             </div>
           </label>
+        </div>
+
+        {/* Horário de Trabalho & Atendimento Fora do Expediente */}
+        <div className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="flex items-center gap-2 text-base font-bold text-white">
+                <Clock className="h-5 w-5 text-emerald-400" />
+                Horário de Trabalho &amp; Pausas Programadas
+              </h3>
+              <p className="mt-1 text-xs text-slate-400">
+                Defina os dias e intervalos de expediente para não rodar 24/7 — escolha pausar silenciosamente, enviar aviso personalizado (ex: horário ou contato do NOC) ou ativar o modo de atendimento inverso.
+              </p>
+            </div>
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                !settings.businessHoursEnabled
+                  ? 'bg-slate-800 text-slate-300'
+                  : businessHoursStatus?.aiAllowedNow
+                    ? 'bg-emerald-500/15 text-emerald-300'
+                    : 'bg-amber-500/15 text-amber-300'
+              }`}
+            >
+              {!settings.businessHoursEnabled
+                ? '24/7 (Sempre ativo)'
+                : businessHoursStatus?.aiAllowedNow
+                  ? 'IA Ativa agora'
+                  : 'Fora do horário ativo'}
+            </span>
+          </div>
+
+          {businessHoursStatus && settings.businessHoursEnabled && (
+            <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-3.5 py-2.5 text-xs text-slate-300">
+              <strong className="text-emerald-300">Status atual:</strong>{' '}
+              {businessHoursStatus.summary}
+            </div>
+          )}
+
+          <label className="flex cursor-pointer items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              checked={Boolean(settings.businessHoursEnabled)}
+              onChange={(e) =>
+                setSettings({
+                  ...settings,
+                  businessHoursEnabled: e.target.checked,
+                })
+              }
+              className="mt-1 accent-emerald-500"
+            />
+            <div>
+              <p className="font-medium text-white">
+                Ativar controle de horário de trabalho (desativar funcionamento 24/7)
+              </p>
+              <p className="text-xs text-slate-400">
+                Novas mensagens recebidas sempre continuam chegando e sendo registradas normalmente no painel em qualquer horário.
+              </p>
+            </div>
+          </label>
+
+          {settings.businessHoursEnabled && (
+            <div className="space-y-5 border-t border-slate-800 pt-4">
+              {/* Modo de Operação */}
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-slate-300">
+                  Modo de Funcionamento da IA
+                </label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings({
+                        ...settings,
+                        businessHoursMode: 'ACTIVE_DURING_HOURS',
+                      })
+                    }
+                    className={`rounded-xl border p-3.5 text-left transition ${
+                      (settings.businessHoursMode || 'ACTIVE_DURING_HOURS') ===
+                      'ACTIVE_DURING_HOURS'
+                        ? 'border-emerald-500 bg-emerald-500/10'
+                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <p className="flex items-center gap-1.5 text-xs font-bold text-white">
+                      <Sun className="h-4 w-4 text-emerald-400" />
+                      Horário Comercial (IA ativa DENTRO do expediente)
+                    </p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
+                      A IA responde normalmente nos intervalos configurados abaixo. Fora deles (ex: almoço, noite, fim de semana), pausa ou envia o aviso configurado.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings({
+                        ...settings,
+                        businessHoursMode: 'INVERSE_AFTER_HOURS',
+                      })
+                    }
+                    className={`rounded-xl border p-3.5 text-left transition ${
+                      settings.businessHoursMode === 'INVERSE_AFTER_HOURS'
+                        ? 'border-emerald-500 bg-emerald-500/10'
+                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <p className="flex items-center gap-1.5 text-xs font-bold text-white">
+                      <Moon className="h-4 w-4 text-violet-400" />
+                      Atendimento Inverso (IA ativa FORA do expediente)
+                    </p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
+                      Durante o expediente abaixo (quando sua equipe humana atende), a IA fica pausada ou envia aviso. À noite, almoço e fins de semana a IA assume automaticamente!
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Fuso Horário + Presets */}
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div className="min-w-[240px] flex-1 sm:max-w-xs">
+                  <label className="mb-1 block text-xs font-medium text-slate-400">
+                    Fuso Horário
+                  </label>
+                  <select
+                    value={settings.businessHoursTimezone || 'America/Sao_Paulo'}
+                    onChange={(e) =>
+                      setSettings({
+                        ...settings,
+                        businessHoursTimezone: e.target.value,
+                      })
+                    }
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                  >
+                    {TIMEZONE_OPTIONS.map((tz) => (
+                      <option key={tz.value} value={tz.value}>
+                        {tz.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] text-slate-400">
+                    Modelos rápidos:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => applySchedulePreset('commercial')}
+                    className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700"
+                  >
+                    Seg–Sex 08h–18h
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applySchedulePreset('lunch')}
+                    className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700"
+                  >
+                    Seg–Sex c/ pausa almoço
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applySchedulePreset('saturday')}
+                    className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700"
+                  >
+                    Seg–Sáb (Sáb até 13h)
+                  </button>
+                </div>
+              </div>
+
+              {/* Grade Semanal com múltiplos intervalos */}
+              <div className="space-y-2 rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                <p className="text-xs font-semibold text-slate-300">
+                  {settings.businessHoursMode === 'INVERSE_AFTER_HOURS'
+                    ? 'Grade do Expediente Humano (fora destes horários a IA atende automaticamente)'
+                    : 'Grade de Funcionamento (nestes intervalos a IA atende automaticamente)'}
+                </p>
+                <div className="divide-y divide-slate-800/70">
+                  {DAY_LIST.map((day) => {
+                    const dayCfg = schedule[day.key] || {
+                      enabled: false,
+                      intervals: [],
+                    };
+                    return (
+                      <div
+                        key={day.key}
+                        className="flex flex-col gap-2 py-2.5 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <label className="flex w-40 shrink-0 cursor-pointer items-center gap-2.5 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={dayCfg.enabled}
+                            onChange={() => toggleDayEnabled(day.key)}
+                            className="accent-emerald-500"
+                          />
+                          <span
+                            className={
+                              dayCfg.enabled
+                                ? 'font-semibold text-white'
+                                : 'text-slate-500'
+                            }
+                          >
+                            {day.label}
+                          </span>
+                        </label>
+
+                        {!dayCfg.enabled ? (
+                          <span className="text-[11px] text-slate-500">
+                            {settings.businessHoursMode === 'INVERSE_AFTER_HOURS'
+                              ? 'Sem expediente humano (IA ativa o dia todo)'
+                              : 'Sem atendimento (fora do horário o dia todo)'}
+                          </span>
+                        ) : (
+                          <div className="flex flex-1 flex-wrap items-center gap-2 sm:justify-end">
+                            {dayCfg.intervals.map((iv, idx) => (
+                              <div
+                                key={`${day.key}-${idx}`}
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-2.5 py-1 text-xs"
+                              >
+                                <input
+                                  type="time"
+                                  value={iv.start}
+                                  onChange={(e) =>
+                                    updateDayInterval(
+                                      day.key,
+                                      idx,
+                                      'start',
+                                      e.target.value
+                                    )
+                                  }
+                                  className="bg-transparent text-xs text-white focus:outline-none"
+                                />
+                                <span className="text-slate-500">às</span>
+                                <input
+                                  type="time"
+                                  value={iv.end}
+                                  onChange={(e) =>
+                                    updateDayInterval(
+                                      day.key,
+                                      idx,
+                                      'end',
+                                      e.target.value
+                                    )
+                                  }
+                                  className="bg-transparent text-xs text-white focus:outline-none"
+                                />
+                                {dayCfg.intervals.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      removeDayInterval(day.key, idx)
+                                    }
+                                    title="Remover intervalo"
+                                    className="ml-0.5 text-slate-500 hover:text-rose-400"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                            {dayCfg.intervals.length < 4 && (
+                              <button
+                                type="button"
+                                onClick={() => addDayInterval(day.key)}
+                                title="Adicionar intervalo (ex: após pausa de almoço)"
+                                className="inline-flex items-center gap-1 rounded-lg border border-dashed border-slate-700 px-2 py-1 text-[11px] font-medium text-emerald-300 hover:border-emerald-500/50 hover:bg-emerald-500/10"
+                              >
+                                <Plus className="h-3 w-3" />
+                                Intervalo
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Ação quando fora do horário ativo da IA */}
+              <div className="space-y-3">
+                <label className="block text-xs font-semibold text-slate-300">
+                  {settings.businessHoursMode === 'INVERSE_AFTER_HOURS'
+                    ? 'Ação durante o expediente humano (quando a IA não está ativa)'
+                    : 'Ação fora do horário de trabalho (ou durante pausas/intervalos)'}
+                </label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings({ ...settings, offHoursAction: 'PAUSE' })
+                    }
+                    className={`rounded-xl border p-3.5 text-left transition ${
+                      (settings.offHoursAction || 'PAUSE') === 'PAUSE'
+                        ? 'border-emerald-500 bg-emerald-500/10'
+                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <p className="text-xs font-bold text-white">
+                      Pausar silenciosamente
+                    </p>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      Recebe e exibe todas as conversas normalmente no painel, sem enviar nenhuma resposta automática.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings({
+                        ...settings,
+                        offHoursAction: 'SEND_MESSAGE',
+                      })
+                    }
+                    className={`rounded-xl border p-3.5 text-left transition ${
+                      settings.offHoursAction === 'SEND_MESSAGE'
+                        ? 'border-emerald-500 bg-emerald-500/10'
+                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <p className="text-xs font-bold text-white">
+                      Enviar mensagem específica automática
+                    </p>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      Informa horário de atendimento, contato do NOC/plantão ou orientação personalizada (com controle anti-repetição).
+                    </p>
+                  </button>
+                </div>
+
+                {settings.offHoursAction === 'SEND_MESSAGE' && (
+                  <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-xs font-semibold text-slate-300">
+                        Mensagem específica (aceita{' '}
+                        <code className="text-emerald-300">{'{{primeiro_nome}}'}</code>{' '}
+                        e <code className="text-emerald-300">{'{{nome}}'}</code>)
+                      </label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {OFF_HOURS_TEMPLATES.map((tpl) => (
+                          <button
+                            key={tpl.label}
+                            type="button"
+                            onClick={() =>
+                              setSettings({
+                                ...settings,
+                                offHoursMessage: tpl.text,
+                              })
+                            }
+                            className="rounded-lg bg-slate-800 px-2.5 py-1 text-[10px] font-semibold text-emerald-300 hover:bg-slate-700"
+                          >
+                            Modelo: {tpl.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <textarea
+                      rows={3}
+                      value={settings.offHoursMessage || ''}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          offHoursMessage: e.target.value,
+                        })
+                      }
+                      placeholder="Ex: Olá {{primeiro_nome}}! Nosso horário é de Seg a Sex das 08h às 18h. Em caso de urgência, contate nosso NOC em..."
+                      className="w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-xs text-white"
+                    />
+
+                    <div className="flex flex-wrap items-center gap-3">
+                      <label className="text-xs text-slate-400">
+                        Não repetir este aviso para o mesmo contato por (minutos):
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={1440}
+                        value={settings.offHoursCooldownMin || 60}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            offHoursCooldownMin: Number(e.target.value),
+                          })
+                        }
+                        className="w-24 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Módulo de Leitura de Imagens (Visão IA) */}

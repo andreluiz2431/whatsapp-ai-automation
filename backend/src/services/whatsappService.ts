@@ -25,6 +25,10 @@ import {
   transcribeAudioWithAi,
 } from './aiService';
 import { isUserAdmin, parsePermissions } from './authService';
+import {
+  evaluateBusinessHours,
+  renderOffHoursMessage,
+} from './businessHours';
 
 const logger = pino({ level: 'silent' });
 
@@ -259,6 +263,7 @@ class UserWhatsAppSession {
   private campaignRunning = false;
   private pendingAiTimers = new Map<string, NodeJS.Timeout>();
   private replyQueue = new Map<string, AiReplyQueueItem>();
+  private lastOffHoursNoticeAt = new Map<string, number>();
   private msgRetryCounterCache = new MemoryCacheStore(15 * 60 * 1000, 1000);
   private userDevicesCache = new MemoryCacheStore(60 * 60 * 1000, 1000);
   private signalKeyCache = new MemoryCacheStore(60 * 60 * 1000, 3000);
@@ -1050,6 +1055,83 @@ class UserWhatsAppSession {
         return;
       }
 
+      // Controle de Horário de Trabalho (Horário Comercial ou Atendimento Inverso)
+      const bh = evaluateBusinessHours(settings);
+      if (bh.enabled && !bh.aiAllowedNow) {
+        if (bh.offHoursAction === 'SEND_MESSAGE' && bh.offHoursMessage.trim()) {
+          const lastSentMs = this.lastOffHoursNoticeAt.get(conversation.id) || 0;
+          const cooldownMs = bh.offHoursCooldownMin * 60 * 1000;
+          if (Date.now() - lastSentMs >= cooldownMs) {
+            this.lastOffHoursNoticeAt.set(conversation.id, Date.now());
+            const noticeText = renderOffHoursMessage(
+              bh.offHoursMessage,
+              contact.name
+            );
+            try {
+              const waNoticeId = await this.simulateTypingAndSend(
+                contact.jid,
+                noticeText,
+                true
+              );
+              const savedNotice = await prisma.message.create({
+                data: {
+                  conversationId: conversation.id,
+                  waMessageId: waNoticeId || undefined,
+                  direction: 'OUTBOUND',
+                  senderType: 'AI',
+                  body: noticeText,
+                  status: 'SENT',
+                },
+              });
+              const updatedNoticeConv = await prisma.conversation.update({
+                where: { id: conversation.id },
+                data: {
+                  lastMessageAt: new Date(),
+                  lastMessagePreview: noticeText.slice(0, 120),
+                },
+                include: {
+                  contact: { include: { tags: { include: { tag: true } } } },
+                  activeRule: true,
+                },
+              });
+              emitUserEvent(this.userId, 'message:new', savedNotice);
+              emitUserEvent(this.userId, 'conversation:updated', updatedNoticeConv);
+              emitUserEvent(this.userId, 'dashboard:refresh', {});
+              await logActivity(
+                this.userId,
+                'AI',
+                `Aviso de fora do horário (${bh.currentLocalTime}) enviado para ${contactLabel}.`,
+                'INFO'
+              );
+            } catch (noticeErr) {
+              await logActivity(
+                this.userId,
+                'AI',
+                `Falha ao enviar aviso de fora do horário para ${contactLabel}: ${
+                  noticeErr instanceof Error ? noticeErr.message : 'erro desconhecido'
+                }`,
+                'ERROR'
+              );
+            }
+          } else {
+            await logActivity(
+              this.userId,
+              'AI',
+              `Fora do horário (${bh.currentLocalTime}) — aviso já enviado recentemente para ${contactLabel} (cooldown ${bh.offHoursCooldownMin} min).`,
+              'INFO'
+            );
+          }
+        } else {
+          await logActivity(
+            this.userId,
+            'AI',
+            `Fora do horário de trabalho (${bh.currentLocalTime}) — IA pausada para ${contactLabel}.`,
+            'WARN'
+          );
+        }
+        return;
+      }
+
       const existingTimer = this.pendingAiTimers.get(conversation.id);
       if (existingTimer) {
         clearTimeout(existingTimer);
@@ -1236,9 +1318,15 @@ class UserWhatsAppSession {
       const phone = contactPhone || conv?.contact.phone || '';
       const preview = lastIncomingPreview || conv?.lastMessagePreview || '';
 
-      if (!conv || conv.mode !== 'AUTO' || settings?.globalAutomationPaused) {
+      const bhCheck = evaluateBusinessHours(settings);
+      if (
+        !conv ||
+        conv.mode !== 'AUTO' ||
+        settings?.globalAutomationPaused ||
+        (bhCheck.enabled && !bhCheck.aiAllowedNow)
+      ) {
         console.log(
-          `[WhatsApp][AI] Ignorando resposta para ${contactLabel} (mode=${conv?.mode}, globalPaused=${settings?.globalAutomationPaused})`
+          `[WhatsApp][AI] Ignorando resposta para ${contactLabel} (mode=${conv?.mode}, globalPaused=${settings?.globalAutomationPaused}, bhAllowed=${bhCheck.aiAllowedNow})`
         );
         this.removeReplyQueueItem(conversationId);
         return;

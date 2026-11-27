@@ -12,6 +12,10 @@ import {
   transcribeAudioWithAi,
 } from '../services/aiService';
 import { isUserAdmin } from '../services/authService';
+import {
+  evaluateBusinessHours,
+  sanitizeWeeklySchedule,
+} from '../services/businessHours';
 import { whatsappManager } from '../services/whatsappService';
 
 export const settingsRouter = Router();
@@ -27,7 +31,8 @@ settingsRouter.get('/', async (req, res) => {
       getUserSettings(userId),
       checkAiHealth(userId),
     ]);
-    res.json({ settings, aiHealth });
+    const businessHoursStatus = evaluateBusinessHours(settings);
+    res.json({ settings, aiHealth, businessHoursStatus });
   } catch (err) {
     res.status(500).json({
       error: err instanceof Error ? err.message : 'Erro ao carregar configurações.',
@@ -63,6 +68,13 @@ settingsRouter.put('/', async (req, res) => {
       defaultMaxDelaySec,
       defaultBatchSize,
       defaultBatchPauseMin,
+      businessHoursEnabled,
+      businessHoursTimezone,
+      businessHoursMode,
+      businessHoursScheduleJson,
+      offHoursAction,
+      offHoursMessage,
+      offHoursCooldownMin,
     } = req.body;
 
     const isAdmin = isUserAdmin(req.user!);
@@ -153,6 +165,49 @@ settingsRouter.put('/', async (req, res) => {
         ...(defaultBatchPauseMin !== undefined
           ? { defaultBatchPauseMin: Math.max(1, Number(defaultBatchPauseMin) || 5) }
           : {}),
+        ...(businessHoursEnabled !== undefined
+          ? { businessHoursEnabled: Boolean(businessHoursEnabled) }
+          : {}),
+        ...(businessHoursTimezone !== undefined
+          ? {
+              businessHoursTimezone:
+                String(businessHoursTimezone).trim() || 'America/Sao_Paulo',
+            }
+          : {}),
+        ...(businessHoursMode !== undefined
+          ? {
+              businessHoursMode:
+                String(businessHoursMode).toUpperCase() === 'INVERSE_AFTER_HOURS'
+                  ? 'INVERSE_AFTER_HOURS'
+                  : 'ACTIVE_DURING_HOURS',
+            }
+          : {}),
+        ...(businessHoursScheduleJson !== undefined
+          ? {
+              businessHoursScheduleJson: JSON.stringify(
+                sanitizeWeeklySchedule(businessHoursScheduleJson)
+              ),
+            }
+          : {}),
+        ...(offHoursAction !== undefined
+          ? {
+              offHoursAction:
+                String(offHoursAction).toUpperCase() === 'SEND_MESSAGE'
+                  ? 'SEND_MESSAGE'
+                  : 'PAUSE',
+            }
+          : {}),
+        ...(offHoursMessage !== undefined
+          ? { offHoursMessage: String(offHoursMessage).trim() }
+          : {}),
+        ...(offHoursCooldownMin !== undefined
+          ? {
+              offHoursCooldownMin: Math.max(
+                1,
+                Math.min(1440, Number(offHoursCooldownMin) || 60)
+              ),
+            }
+          : {}),
       },
     });
 
@@ -160,6 +215,7 @@ settingsRouter.put('/', async (req, res) => {
       checkAiHealth(userId),
       getAiUsageSummary(userId),
     ]);
+    const businessHoursStatus = evaluateBusinessHours(updated);
     await whatsappManager.getSession(userId).broadcastStatus();
     emitUserEvent(userId, 'ai:usage', aiUsage);
     emitUserEvent(userId, 'dashboard:refresh', {});
@@ -170,11 +226,19 @@ settingsRouter.put('/', async (req, res) => {
         updated.aiProvider === 'gemini'
           ? `Gemini ${updated.geminiModel}`
           : `Ollama ${updated.ollamaModel}`
-      }${updated.enableImageReading ? ' • Leitura de Imagens ATIVA' : ''}).`,
+      }${updated.enableImageReading ? ' • Leitura de Imagens ATIVA' : ''}${
+        updated.businessHoursEnabled
+          ? ` • Horário de Trabalho ATIVO (${
+              updated.businessHoursMode === 'INVERSE_AFTER_HOURS'
+                ? 'Atendimento Inverso'
+                : 'Horário Comercial'
+            })`
+          : ''
+      }).`,
       'INFO'
     );
 
-    res.json({ settings: updated, aiHealth });
+    res.json({ settings: updated, aiHealth, businessHoursStatus });
   } catch (err) {
     res.status(500).json({
       error: err instanceof Error ? err.message : 'Erro ao salvar configurações.',
