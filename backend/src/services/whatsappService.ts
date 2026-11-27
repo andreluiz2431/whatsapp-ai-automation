@@ -1,9 +1,11 @@
 import makeWASocket, {
   Browsers,
+  CacheStore,
   DisconnectReason,
   WASocket,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
   proto,
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
@@ -24,6 +26,47 @@ import {
 } from './aiService';
 
 const logger = pino({ level: 'silent' });
+
+/**
+ * Cache em memória com TTL e limite de entradas compatível com Baileys CacheStore
+ * (evita condições de corrida no SignalKeyStore e rastreia retries de descriptografia).
+ */
+class MemoryCacheStore implements CacheStore {
+  private store = new Map<string, { value: unknown; expiresAt: number }>();
+
+  constructor(
+    private readonly ttlMs = 30 * 60 * 1000,
+    private readonly maxEntries = 2000
+  ) {}
+
+  get<T>(key: string): T | undefined {
+    const entry = this.store.get(key);
+    if (!entry) return undefined;
+    if (Date.now() > entry.expiresAt) {
+      this.store.delete(key);
+      return undefined;
+    }
+    return entry.value as T;
+  }
+
+  set<T>(key: string, value: T): void {
+    if (this.store.size >= this.maxEntries && !this.store.has(key)) {
+      const oldestKey = this.store.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.store.delete(oldestKey);
+      }
+    }
+    this.store.set(key, { value, expiresAt: Date.now() + this.ttlMs });
+  }
+
+  del(key: string): void {
+    this.store.delete(key);
+  }
+
+  flushAll(): void {
+    this.store.clear();
+  }
+}
 
 export type AiReplyQueueStatus =
   | 'RECEIVED_QUEUED'
@@ -215,10 +258,75 @@ class UserWhatsAppSession {
   private campaignRunning = false;
   private pendingAiTimers = new Map<string, NodeJS.Timeout>();
   private replyQueue = new Map<string, AiReplyQueueItem>();
+  private msgRetryCounterCache = new MemoryCacheStore(15 * 60 * 1000, 1000);
+  private userDevicesCache = new MemoryCacheStore(60 * 60 * 1000, 1000);
+  private signalKeyCache = new MemoryCacheStore(60 * 60 * 1000, 3000);
+  private sentMessageCache = new Map<string, proto.IMessage>();
 
   constructor(userId: string) {
     this.userId = userId;
     this.sessionPath = path.join(config.sessionDir, userId);
+  }
+
+  private rememberSentMessage(
+    waMessageId: string | null | undefined,
+    message: proto.IMessage | null | undefined
+  ): void {
+    if (!waMessageId || !message) return;
+    if (this.sentMessageCache.size >= 500 && !this.sentMessageCache.has(waMessageId)) {
+      const oldest = this.sentMessageCache.keys().next().value;
+      if (oldest !== undefined) {
+        this.sentMessageCache.delete(oldest);
+      }
+    }
+    this.sentMessageCache.set(waMessageId, message);
+  }
+
+  private async lookupMessageForRetry(
+    key: proto.IMessageKey
+  ): Promise<proto.IMessage | undefined> {
+    const waId = key.id;
+    if (!waId) return undefined;
+
+    const cached = this.sentMessageCache.get(waId);
+    if (cached) return cached;
+
+    try {
+      const found = await prisma.message.findFirst({
+        where: {
+          waMessageId: waId,
+          conversation: { userId: this.userId },
+        },
+        select: { body: true },
+      });
+      if (found?.body) {
+        return { conversation: found.body };
+      }
+    } catch {
+      // fallback silencioso
+    }
+    return undefined;
+  }
+
+  public shutdownGracefully(): void {
+    this.shouldReconnect = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    for (const timer of this.pendingAiTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.pendingAiTimers.clear();
+    if (this.sock) {
+      try {
+        this.sock.end(undefined);
+      } catch {
+        // ignora erro ao encerrar socket
+      }
+      this.sock = null;
+    }
+    this.status = 'DISCONNECTED';
   }
 
   public getReplyQueue(): AiReplyQueueItem[] {
@@ -355,13 +463,25 @@ class UserWhatsAppSession {
 
       const sock = makeWASocket({
         version,
-        auth: state,
+        auth: {
+          creds: state.creds,
+          keys: makeCacheableSignalKeyStore(
+            state.keys,
+            logger,
+            this.signalKeyCache
+          ),
+        },
         logger,
         printQRInTerminal: false,
         browser: Browsers.ubuntu('ZapFlow AI'),
         markOnlineOnConnect: false,
         syncFullHistory: false,
         generateHighQualityLinkPreview: false,
+        msgRetryCounterCache: this.msgRetryCounterCache,
+        userDevicesCache: this.userDevicesCache,
+        maxMsgRetryCount: 5,
+        retryRequestDelayMs: 350,
+        getMessage: (key) => this.lookupMessageForRetry(key),
       });
 
       this.sock = sock;
@@ -417,6 +537,7 @@ class UserWhatsAppSession {
           const statusCode = (lastDisconnect?.error as Boom | undefined)?.output
             ?.statusCode;
           const loggedOut = statusCode === DisconnectReason.loggedOut;
+          const replaced = statusCode === DisconnectReason.connectionReplaced;
 
           this.status = 'DISCONNECTED';
 
@@ -427,6 +548,12 @@ class UserWhatsAppSession {
               'Sessão desconectada pelo celular. Limpe a sessão e escaneie um novo QR Code.';
             this.shouldReconnect = false;
             await this.clearSessionFiles();
+            await logActivity(this.userId, 'WHATSAPP', this.lastError, 'WARN');
+          } else if (replaced) {
+            // Outra instância assumiu temporariamente a sessão (ex: redeploy) — não briga pela conexão
+            this.shouldReconnect = false;
+            this.lastError =
+              'Conexão substituída por outra instância ativa. Se necessário, clique em Conectar.';
             await logActivity(this.userId, 'WHATSAPP', this.lastError, 'WARN');
           } else if (this.shouldReconnect) {
             this.reconnectAttempts += 1;
@@ -507,6 +634,10 @@ class UserWhatsAppSession {
   }
 
   private async clearSessionFiles(): Promise<void> {
+    this.signalKeyCache.flushAll();
+    this.msgRetryCounterCache.flushAll();
+    this.userDevicesCache.flushAll();
+    this.sentMessageCache.clear();
     try {
       if (fs.existsSync(this.sessionPath)) {
         fs.rmSync(this.sessionPath, { recursive: true, force: true });
@@ -547,7 +678,9 @@ class UserWhatsAppSession {
     }
 
     const sent = await this.sock.sendMessage(jid, { text });
-    return sent?.key?.id || null;
+    const sentId = sent?.key?.id || null;
+    this.rememberSentMessage(sentId, sent?.message || { conversation: text });
+    return sentId;
   }
 
   public async sendManualMessage(
@@ -1216,6 +1349,12 @@ class WhatsAppManager {
       this.sessions.set(userId, session);
     }
     return session;
+  }
+
+  public shutdownAll(): void {
+    for (const session of this.sessions.values()) {
+      session.shutdownGracefully();
+    }
   }
 
   public async autoConnectExistingSessions(): Promise<void> {

@@ -146,6 +146,23 @@ async function bootstrap(): Promise<void> {
     );
     await whatsappManager.autoConnectExistingSessions();
   });
+
+  let shuttingDown = false;
+  const gracefulShutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[Server] Recebido ${signal}. Encerrando conexões WhatsApp com segurança...`);
+    whatsappManager.shutdownAll();
+    io.close();
+    server.close(async () => {
+      await prisma.$disconnect().catch(() => {});
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 4000).unref();
+  };
+
+  process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
 }
 
 bootstrap().catch((err) => {
