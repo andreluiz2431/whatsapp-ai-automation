@@ -8,6 +8,7 @@ import { CampaignsPage } from './pages/CampaignsPage';
 import { ConversationsPage } from './pages/ConversationsPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { GuidePage } from './pages/GuidePage';
+import { LandingPage } from './pages/LandingPage';
 import { RulesPage } from './pages/RulesPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { TrainingPage } from './pages/TrainingPage';
@@ -42,6 +43,10 @@ const INITIAL_RUNTIME: CampaignRuntimeState = {
 export default function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [publicView, setPublicView] = useState<'landing' | 'auth'>('landing');
+  const [authInitialMode, setAuthInitialMode] = useState<'login' | 'register'>(
+    'login'
+  );
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [waState, setWaState] = useState<WhatsAppState>(INITIAL_WA_STATE);
   const [campaignRuntime, setCampaignRuntime] =
@@ -153,6 +158,7 @@ export default function App() {
     }
     socket.disconnect();
     setUser(null);
+    setPublicView('landing');
     setActiveTab('dashboard');
   };
 
@@ -165,7 +171,27 @@ export default function App() {
   }
 
   if (!user) {
-    return <AuthPage onAuthenticated={setUser} />;
+    if (publicView === 'landing') {
+      return (
+        <LandingPage
+          onGoToAuth={(mode) => {
+            setAuthInitialMode(mode);
+            setPublicView('auth');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+        />
+      );
+    }
+    return (
+      <AuthPage
+        initialMode={authInitialMode}
+        onAuthenticated={setUser}
+        onBackToLanding={() => {
+          setPublicView('landing');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+      />
+    );
   }
 
   return (

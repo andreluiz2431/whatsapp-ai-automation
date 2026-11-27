@@ -20,7 +20,8 @@ Aplicação web full-stack **multi-usuário**, **100% gratuita e open-source**, 
 
 ## Funcionalidades Implementadas
 
-### 1. Autenticação e Isolamento Multi-Usuário
+### 1. Landing Page Inicial, Autenticação e Isolamento Multi-Usuário
+- **Landing Page inicial (`LandingPage.tsx`):** tela de apresentação pública para visitantes não logados com visão geral da aplicação, simulação interativa de **4 exemplos reais de uso** (*Vendas & Leads*, *E-commerce & Pix*, *Clínicas & Áudios* e *Suporte 24h*), passo a passo de início rápido e botões diretos para **Entrar** ou **Criar Conta Grátis**.
 - Login com **Google (OAuth)** e **E-mail/Senha** (com criação de conta).
 - Sessões assinadas em cookie `HttpOnly` (`SameSite=Lax`, `Secure` em produção).
 - Middleware `requireAuth` em todas as rotas `/api/*` e autenticação no handshake do **Socket.io** com salas privadas por usuário (`user:<userId>`).
@@ -115,7 +116,7 @@ whatsapp-ai-automation/
     └── src/
         ├── App.tsx              # Controle de sessão, Socket.io pós-login e roteamento das telas
         ├── components/          # Sidebar (scroll, barra uso IA, avatar dropdown mobile), StatusBadge
-        └── pages/               # AuthPage, DashboardPage, ConversationsPage, RulesPage, TrainingPage, CampaignsPage, SettingsPage, GuidePage
+        └── pages/               # LandingPage, AuthPage, DashboardPage, ConversationsPage, RulesPage, TrainingPage, CampaignsPage, SettingsPage, GuidePage
 ```
 
 ---

@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   ExternalLink,
   KeyRound,
   Lock,
@@ -34,10 +35,16 @@ declare global {
 
 interface Props {
   onAuthenticated: (user: AuthUser) => void;
+  initialMode?: 'login' | 'register';
+  onBackToLanding?: () => void;
 }
 
-export function AuthPage({ onAuthenticated }: Props) {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+export function AuthPage({
+  onAuthenticated,
+  initialMode = 'login',
+  onBackToLanding,
+}: Props) {
+  const [mode, setMode] = useState<'login' | 'register'>(initialMode);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -131,7 +138,22 @@ export function AuthPage({ onAuthenticated }: Props) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 p-4 text-slate-100">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-slate-950 p-4 text-slate-100">
+      {onBackToLanding && (
+        <div className="mb-4 flex w-full max-w-5xl items-center justify-between">
+          <button
+            type="button"
+            onClick={onBackToLanding}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-3.5 py-2 text-xs font-semibold text-slate-300 transition hover:border-slate-700 hover:bg-slate-800 hover:text-white"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Voltar para a página inicial
+          </button>
+          <span className="hidden text-xs text-slate-500 sm:inline">
+            ZapFlow AI • Acesso seguro
+          </span>
+        </div>
+      )}
       <div className="grid w-full max-w-5xl items-stretch gap-6 lg:grid-cols-12">
         {/* Card de Login / Cadastro */}
         <div className="flex flex-col justify-between space-y-6 rounded-3xl border border-slate-800 bg-slate-900/80 p-7 shadow-2xl sm:p-8 lg:col-span-6">
