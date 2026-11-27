@@ -16,6 +16,311 @@ const upload = multer({
   limits: { fileSize: 8 * 1024 * 1024 },
 });
 
+interface ParsedTrainingImportItem {
+  customerMessage: string;
+  idealResponse: string;
+  feedbackNote: string | null;
+  ruleName: string | null;
+  isActive: boolean;
+}
+
+const TEMPLATE_EXAMPLES: Array<{
+  customerMessage: string;
+  idealResponse: string;
+  feedbackNote: string;
+  ruleName: string;
+  isActive: boolean;
+}> = [
+  {
+    customerMessage: 'Qual o valor e como funciona o pagamento?',
+    idealResponse:
+      'Temos opções a partir de R$ 97/mês. Aceitamos Pix com 5% de desconto ou cartão de crédito em até 6x sem juros. Qual plano faz mais sentido para você?',
+    feedbackNote: 'Sempre mencionar Pix e parcelamento de forma objetiva.',
+    ruleName: 'Global',
+    isActive: true,
+  },
+  {
+    customerMessage: 'Vocês atendem em qual horário?',
+    idealResponse:
+      'Nosso atendimento humano funciona de segunda a sexta, das 9h às 18h, mas posso adiantar suas dúvidas por aqui agora mesmo!',
+    feedbackNote: 'Informar horário comercial sem encerrar o assunto.',
+    ruleName: 'Global',
+    isActive: true,
+  },
+  {
+    customerMessage: 'Quero cancelar ou falar com um atendente humano.',
+    idealResponse:
+      'Claro! Vou encaminhar sua conversa agora mesmo para um de nossos especialistas humanos te ajudar. [TRANSFERIR_HUMANO]',
+    feedbackNote: 'Acionar transferência para humano imediatamente.',
+    ruleName: 'Global',
+    isActive: true,
+  },
+];
+
+function escapeCsvCell(value: string): string {
+  const safe = String(value ?? '');
+  if (/[;"\n\r,]/.test(safe)) {
+    return `"${safe.replace(/"/g, '""')}"`;
+  }
+  return safe;
+}
+
+function buildExamplesCsv(
+  rows: Array<{
+    customerMessage: string;
+    idealResponse: string;
+    feedbackNote?: string | null;
+    ruleName?: string | null;
+    isActive?: boolean;
+  }>
+): string {
+  const header = 'mensagem_cliente;resposta_ideal;observacao;regra;ativo';
+  const lines = rows.map((r) =>
+    [
+      escapeCsvCell(r.customerMessage),
+      escapeCsvCell(r.idealResponse),
+      escapeCsvCell(r.feedbackNote || ''),
+      escapeCsvCell(r.ruleName || 'Global'),
+      r.isActive === false ? 'false' : 'true',
+    ].join(';')
+  );
+  // UTF-8 BOM para abrir com acentuação perfeita no Excel
+  return `\uFEFF${[header, ...lines].join('\r\n')}\r\n`;
+}
+
+function parseCsvRows(raw: string): string[][] {
+  const clean = raw.replace(/^\uFEFF/, '');
+  // Detecta delimitador predominante na primeira linha (ponto-e-vírgula ou vírgula)
+  const firstLine = clean.split(/\r?\n/)[0] || '';
+  const semiCount = (firstLine.match(/;/g) || []).length;
+  const commaCount = (firstLine.match(/,/g) || []).length;
+  const delimiter = semiCount >= commaCount ? ';' : ',';
+
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentCell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < clean.length; i++) {
+    const ch = clean[i];
+    const next = clean[i + 1];
+
+    if (inQuotes) {
+      if (ch === '"' && next === '"') {
+        currentCell += '"';
+        i++;
+      } else if (ch === '"') {
+        inQuotes = false;
+      } else {
+        currentCell += ch;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delimiter) {
+      currentRow.push(currentCell);
+      currentCell = '';
+    } else if (ch === '\r' && next === '\n') {
+      currentRow.push(currentCell);
+      rows.push(currentRow);
+      currentRow = [];
+      currentCell = '';
+      i++;
+    } else if (ch === '\n' || ch === '\r') {
+      currentRow.push(currentCell);
+      rows.push(currentRow);
+      currentRow = [];
+      currentCell = '';
+    } else {
+      currentCell += ch;
+    }
+  }
+
+  if (currentCell.length > 0 || currentRow.length > 0) {
+    currentRow.push(currentCell);
+    rows.push(currentRow);
+  }
+
+  return rows.filter((r) => r.some((cell) => cell.trim().length > 0));
+}
+
+function parseBoolValue(val: unknown): boolean {
+  if (typeof val === 'boolean') return val;
+  const s = String(val ?? 'true').trim().toLowerCase();
+  if (['false', '0', 'nao', 'não', 'no', 'inativo', 'pausado'].includes(s)) {
+    return false;
+  }
+  return true;
+}
+
+function normalizeHeaderKey(h: string): string {
+  return h
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function parseTrainingExamplesPayload(
+  rawText: string,
+  filename = ''
+): { items: ParsedTrainingImportItem[]; skipped: number } {
+  const trimmed = rawText.replace(/^\uFEFF/, '').trim();
+  if (!trimmed) {
+    return { items: [], skipped: 0 };
+  }
+
+  const looksJson =
+    filename.toLowerCase().endsWith('.json') ||
+    trimmed.startsWith('{') ||
+    trimmed.startsWith('[');
+
+  if (looksJson) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      throw new Error(
+        'Arquivo JSON inválido. Baixe o modelo JSON aceito para conferir a estrutura correta.'
+      );
+    }
+
+    const list = Array.isArray(parsed)
+      ? parsed
+      : parsed &&
+          typeof parsed === 'object' &&
+          Array.isArray((parsed as { examples?: unknown[] }).examples)
+        ? (parsed as { examples: unknown[] }).examples
+        : parsed &&
+            typeof parsed === 'object' &&
+            Array.isArray((parsed as { roteiros?: unknown[] }).roteiros)
+          ? (parsed as { roteiros: unknown[] }).roteiros
+          : null;
+
+    if (!list) {
+      throw new Error(
+        'Estrutura JSON não reconhecida. Use um array de objetos ou { "examples": [...] }.'
+      );
+    }
+
+    const items: ParsedTrainingImportItem[] = [];
+    let skipped = 0;
+
+    for (const entry of list) {
+      if (!entry || typeof entry !== 'object') {
+        skipped++;
+        continue;
+      }
+      const rec = entry as Record<string, unknown>;
+      const customerMessage = String(
+        rec.customerMessage ??
+          rec.mensagem_cliente ??
+          rec.mensagemCliente ??
+          rec.pergunta ??
+          rec.cliente ??
+          ''
+      ).trim();
+      const idealResponse = String(
+        rec.idealResponse ??
+          rec.resposta_ideal ??
+          rec.respostaIdeal ??
+          rec.resposta ??
+          ''
+      ).trim();
+
+      if (!customerMessage || !idealResponse) {
+        skipped++;
+        continue;
+      }
+
+      const rawNote =
+        rec.feedbackNote ?? rec.observacao ?? rec.nota ?? rec.obs ?? '';
+      const rawRule =
+        rec.ruleName ?? rec.regra ?? rec.fluxo ?? rec.rule ?? '';
+      const rawActive = rec.isActive ?? rec.ativo ?? true;
+
+      items.push({
+        customerMessage,
+        idealResponse,
+        feedbackNote: String(rawNote || '').trim() || null,
+        ruleName: String(rawRule || '').trim() || null,
+        isActive: parseBoolValue(rawActive),
+      });
+    }
+
+    return { items, skipped };
+  }
+
+  // CSV
+  const rows = parseCsvRows(trimmed);
+  if (rows.length === 0) return { items: [], skipped: 0 };
+
+  const headers = rows[0].map(normalizeHeaderKey);
+  const idxCustomer = headers.findIndex((h) =>
+    [
+      'mensagemcliente',
+      'customermessage',
+      'cliente',
+      'pergunta',
+      'entrada',
+    ].includes(h)
+  );
+  const idxIdeal = headers.findIndex((h) =>
+    ['respostaideal', 'idealresponse', 'resposta', 'saida'].includes(h)
+  );
+  const idxNote = headers.findIndex((h) =>
+    ['observacao', 'feedbacknote', 'nota', 'obs', 'regraextra'].includes(h)
+  );
+  const idxRule = headers.findIndex((h) =>
+    ['regra', 'rulename', 'fluxo', 'persona', 'escopo'].includes(h)
+  );
+  const idxActive = headers.findIndex((h) =>
+    ['ativo', 'isactive', 'status'].includes(h)
+  );
+
+  const hasHeaderRow = idxCustomer !== -1 && idxIdeal !== -1;
+  const dataRows = hasHeaderRow ? rows.slice(1) : rows;
+  const colCustomer = hasHeaderRow ? idxCustomer : 0;
+  const colIdeal = hasHeaderRow ? idxIdeal : 1;
+  const colNote = hasHeaderRow ? idxNote : 2;
+  const colRule = hasHeaderRow ? idxRule : 3;
+  const colActive = hasHeaderRow ? idxActive : 4;
+
+  const items: ParsedTrainingImportItem[] = [];
+  let skipped = 0;
+
+  for (const row of dataRows) {
+    const customerMessage = String(row[colCustomer] ?? '').trim();
+    const idealResponse = String(row[colIdeal] ?? '').trim();
+    if (!customerMessage || !idealResponse) {
+      skipped++;
+      continue;
+    }
+
+    const feedbackNote =
+      colNote >= 0 ? String(row[colNote] ?? '').trim() || null : null;
+    const ruleName =
+      colRule >= 0 ? String(row[colRule] ?? '').trim() || null : null;
+    const isActive =
+      colActive >= 0 && row[colActive] !== undefined && row[colActive].trim() !== ''
+        ? parseBoolValue(row[colActive])
+        : true;
+
+    items.push({
+      customerMessage,
+      idealResponse,
+      feedbackNote,
+      ruleName,
+      isActive,
+    });
+  }
+
+  return { items, skipped };
+}
+
 trainingRouter.get('/overview', async (req, res) => {
   try {
     const userId = req.user!.id;
@@ -58,6 +363,205 @@ trainingRouter.get('/overview', async (req, res) => {
     });
   }
 });
+
+trainingRouter.get('/examples/template', (req, res) => {
+  const format = String(req.query.format || 'csv').toLowerCase();
+
+  if (format === 'json') {
+    const payload = {
+      version: 1,
+      description:
+        'Modelo oficial de importação de roteiros de treinamento do ZapFlow AI. Preencha "examples" com seus roteiros (use ruleName "Global" ou o nome exato de uma regra em Fluxos & Personas IA).',
+      examples: TEMPLATE_EXAMPLES,
+    };
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="modelo-roteiros-treinamento-zapflow.json"'
+    );
+    res.send(JSON.stringify(payload, null, 2));
+    return;
+  }
+
+  const csv = buildExamplesCsv(TEMPLATE_EXAMPLES);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader(
+    'Content-Disposition',
+    'attachment; filename="modelo-roteiros-treinamento-zapflow.csv"'
+  );
+  res.send(csv);
+});
+
+trainingRouter.get('/examples/export', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const format = String(req.query.format || 'json').toLowerCase();
+    const examples = await prisma.aiTrainingExample.findMany({
+      where: { userId },
+      include: { rule: { select: { name: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const dateTag = new Date().toISOString().slice(0, 10);
+    const normalized = examples.map((ex) => ({
+      customerMessage: ex.customerMessage,
+      idealResponse: ex.idealResponse,
+      feedbackNote: ex.feedbackNote || '',
+      ruleName: ex.rule?.name || 'Global',
+      isActive: ex.isActive,
+      source: ex.source,
+    }));
+
+    if (format === 'csv') {
+      const csv = buildExamplesCsv(normalized);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="roteiros-treinamento-zapflow-${dateTag}.csv"`
+      );
+      res.send(csv);
+      return;
+    }
+
+    const payload = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      total: normalized.length,
+      examples: normalized,
+    };
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="roteiros-treinamento-zapflow-${dateTag}.json"`
+    );
+    res.send(JSON.stringify(payload, null, 2));
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Erro ao exportar roteiros de treinamento.',
+    });
+  }
+});
+
+trainingRouter.post(
+  '/examples/import',
+  upload.single('file'),
+  async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const mode =
+        String(req.body?.mode || 'KEEP').toUpperCase() === 'OVERWRITE'
+          ? 'OVERWRITE'
+          : 'KEEP';
+      const defaultRuleIdRaw = String(req.body?.defaultRuleId || '').trim();
+      let rawText = String(req.body?.text || '');
+      const filename = req.file?.originalname || '';
+
+      if (req.file) {
+        rawText = req.file.buffer.toString('utf-8');
+      }
+
+      if (!rawText.trim()) {
+        res.status(400).json({
+          error:
+            'Envie um arquivo (.csv ou .json) ou cole os roteiros no campo de texto.',
+        });
+        return;
+      }
+
+      const { items, skipped } = parseTrainingExamplesPayload(rawText, filename);
+      if (items.length === 0) {
+        res.status(400).json({
+          error:
+            'Nenhum roteiro válido encontrado no arquivo. Baixe o modelo CSV ou JSON para verificar a estrutura aceita.',
+        });
+        return;
+      }
+
+      const userRules = await prisma.aiRule.findMany({
+        where: { userId },
+        select: { id: true, name: true },
+      });
+
+      let fallbackRuleId: string | null = null;
+      if (defaultRuleIdRaw) {
+        const owned = userRules.find((r) => r.id === defaultRuleIdRaw);
+        if (!owned) {
+          res.status(400).json({ error: 'Regra padrão selecionada é inválida.' });
+          return;
+        }
+        fallbackRuleId = owned.id;
+      }
+
+      const ruleMap = new Map<string, string>();
+      for (const r of userRules) {
+        ruleMap.set(r.name.trim().toLowerCase(), r.id);
+      }
+
+      const recordsToCreate = items.slice(0, 500).map((item) => {
+        let resolvedRuleId: string | null = fallbackRuleId;
+        if (item.ruleName) {
+          const lower = item.ruleName.trim().toLowerCase();
+          if (lower === 'global' || lower === 'todas' || lower === 'todos') {
+            resolvedRuleId = null;
+          } else if (ruleMap.has(lower)) {
+            resolvedRuleId = ruleMap.get(lower) || fallbackRuleId;
+          }
+        }
+        return {
+          userId,
+          ruleId: resolvedRuleId,
+          customerMessage: item.customerMessage,
+          idealResponse: item.idealResponse,
+          feedbackNote: item.feedbackNote,
+          source: 'IMPORT',
+          isActive: item.isActive,
+        };
+      });
+
+      let deletedCount = 0;
+      await prisma.$transaction(async (tx) => {
+        if (mode === 'OVERWRITE') {
+          const del = await tx.aiTrainingExample.deleteMany({
+            where: { userId },
+          });
+          deletedCount = del.count;
+        }
+        await tx.aiTrainingExample.createMany({
+          data: recordsToCreate,
+        });
+      });
+
+      await logActivity(
+        userId,
+        'AI',
+        `Importação de roteiros de treinamento concluída (${recordsToCreate.length} importado(s) • modo: ${
+          mode === 'OVERWRITE'
+            ? `Sobrescrever (${deletedCount} anterior(es) removido(s))`
+            : 'Manter existentes'
+        }).`,
+        'SUCCESS'
+      );
+
+      res.status(201).json({
+        ok: true,
+        mode,
+        importedCount: recordsToCreate.length,
+        deletedCount,
+        skippedCount: skipped,
+      });
+    } catch (err) {
+      res.status(400).json({
+        error:
+          err instanceof Error
+            ? err.message
+            : 'Erro ao importar roteiros de treinamento.',
+      });
+    }
+  }
+);
 
 trainingRouter.post('/examples', async (req, res) => {
   try {

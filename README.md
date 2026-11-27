@@ -59,7 +59,7 @@ Aplicação web full-stack **multi-usuário**, **100% gratuita e open-source**, 
 ### 6. Tela Dedicada de Treinamento da IA (`Treinamento IA`)
 - **Simulador & Treino ao Vivo:** converse diretamente com a persona escolhida sem enviar nada para o WhatsApp real; aprove respostas corretas ou corrija respostas da IA com 1 clique.
 - **Aprender de Conversas Reais (ou `.txt` importados):** a IA analisa históricos reais (incluindo respostas humanas) e extrai automaticamente sugestões de exemplos (*Few-Shot*) e adições para a Base de Conhecimento da regra (incorporáveis com 1 clique).
-- **Base de Exemplos Treinados:** gerenciamento completo (criar manual, ativar/pausar, excluir). Todos os exemplos ativos são injetados automaticamente no prompt antes de cada resposta real.
+- **Base de Exemplos Treinados (com Importação/Exportação em Lote):** gerenciamento completo (criar manual, ativar/pausar, excluir), download de **modelo pronto (CSV para Excel e JSON)**, **exportação dos roteiros existentes** (`.csv` e `.json`) e **importação em massa** (`/api/training/examples/import`) com opção de **Manter existentes** ou **Sobrescrever todos os exemplos**. Todos os exemplos ativos são injetados automaticamente no prompt antes de cada resposta real.
 
 ### 7. Disparador para Lista de Contatos (Campanhas Anti-Ban)
 - Importação de contatos via **colagem (`Nome, Número`)**, **upload de CSV** ou **inserção manual**.

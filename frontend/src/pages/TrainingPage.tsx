@@ -1,8 +1,12 @@
 import {
+  AlertTriangle,
   BookCheck,
   Bot,
   Check,
+  Download,
   Edit3,
+  FileJson,
+  FileSpreadsheet,
   GraduationCap,
   History,
   MessageSquare,
@@ -83,12 +87,27 @@ export function TrainingPage() {
     null
   );
 
-  // Form exemplo manual
+  // Form exemplo manual + Importação/Exportação em lote
   const [showAddForm, setShowAddForm] = useState(false);
+  const [manualPanelMode, setManualPanelMode] = useState<'single' | 'batch'>(
+    'single'
+  );
   const [newCustomerMsg, setNewCustomerMsg] = useState('');
   const [newIdealResp, setNewIdealResp] = useState('');
   const [newNote, setNewNote] = useState('');
   const [newRuleId, setNewRuleId] = useState('');
+
+  const [batchFile, setBatchFile] = useState<File | null>(null);
+  const [batchText, setBatchText] = useState('');
+  const [batchImportMode, setBatchImportMode] = useState<'KEEP' | 'OVERWRITE'>(
+    'KEEP'
+  );
+  const [batchDefaultRuleId, setBatchDefaultRuleId] = useState('');
+  const [importingBatch, setImportingBatch] = useState(false);
+  const [batchResult, setBatchResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
 
   const loadOverview = async () => {
     try {
@@ -380,6 +399,103 @@ export function TrainingPage() {
     if (!confirm('Excluir este exemplo de treinamento?')) return;
     await api.del(`/training/examples/${id}`);
     await loadOverview();
+  };
+
+  const downloadFromApi = async (endpoint: string, fallbackName: string) => {
+    try {
+      const res = await fetch(`/api${endpoint}`, { credentials: 'include' });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Erro ao baixar arquivo.');
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get('Content-Disposition') || '';
+      const match = cd.match(/filename="?([^"]+)"?/i);
+      const filename = match?.[1] || fallbackName;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Erro ao baixar arquivo.');
+    }
+  };
+
+  const handleBatchImport = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!batchFile && !batchText.trim()) {
+      setBatchResult({
+        ok: false,
+        message: 'Selecione um arquivo (.csv ou .json) ou cole os roteiros abaixo.',
+      });
+      return;
+    }
+
+    if (
+      batchImportMode === 'OVERWRITE' &&
+      examples.length > 0 &&
+      !confirm(
+        `Atenção: o modo "Sobrescrever todos" apagará os ${examples.length} exemplo(s) existentes antes de importar os novos roteiros. Deseja continuar?`
+      )
+    ) {
+      return;
+    }
+
+    setImportingBatch(true);
+    setBatchResult(null);
+    try {
+      const formData = new FormData();
+      if (batchFile) {
+        formData.append('file', batchFile);
+      } else {
+        formData.append('text', batchText);
+      }
+      formData.append('mode', batchImportMode);
+      if (batchDefaultRuleId) {
+        formData.append('defaultRuleId', batchDefaultRuleId);
+      }
+
+      const res = await api.post<{
+        ok: boolean;
+        mode: 'KEEP' | 'OVERWRITE';
+        importedCount: number;
+        deletedCount: number;
+        skippedCount: number;
+      }>('/training/examples/import', formData);
+
+      setBatchResult({
+        ok: true,
+        message:
+          res.mode === 'OVERWRITE'
+            ? `${res.importedCount} roteiro(s) importado(s) com sucesso (${res.deletedCount} exemplo(s) anterior(es) substituído(s)${
+                res.skippedCount > 0
+                  ? ` • ${res.skippedCount} linha(s) ignorada(s)`
+                  : ''
+              }).`
+            : `${res.importedCount} roteiro(s) adicionado(s) mantendo os existentes${
+                res.skippedCount > 0
+                  ? ` (${res.skippedCount} linha(s) ignorada(s))`
+                  : ''
+              }.`,
+      });
+      setBatchFile(null);
+      setBatchText('');
+      await loadOverview();
+    } catch (err) {
+      setBatchResult({
+        ok: false,
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Erro ao importar roteiros de treinamento.',
+      });
+    } finally {
+      setImportingBatch(false);
+    }
   };
 
   const renderExtractionPanel = (
@@ -887,84 +1003,395 @@ export function TrainingPage() {
             <p className="text-xs text-slate-400">
               Todos os exemplos ativos abaixo são injetados automaticamente no contexto da IA (Few-Shot Learning) antes de responder no WhatsApp.
             </p>
-            <button
-              onClick={() => setShowAddForm((v) => !v)}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400"
-            >
-              <Plus className="h-4 w-4" />
-              Novo Exemplo Manual
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={examples.length === 0}
+                onClick={() =>
+                  void downloadFromApi(
+                    '/training/examples/export?format=csv',
+                    'roteiros-treinamento-zapflow.csv'
+                  )
+                }
+                title="Exportar todos os roteiros existentes em CSV (Excel)"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-slate-700 disabled:opacity-40"
+              >
+                <Download className="h-3.5 w-3.5 text-emerald-400" />
+                Exportar CSV
+              </button>
+              <button
+                type="button"
+                disabled={examples.length === 0}
+                onClick={() =>
+                  void downloadFromApi(
+                    '/training/examples/export?format=json',
+                    'roteiros-treinamento-zapflow.json'
+                  )
+                }
+                title="Exportar todos os roteiros existentes em JSON"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-slate-700 disabled:opacity-40"
+              >
+                <FileJson className="h-3.5 w-3.5 text-sky-400" />
+                Exportar JSON
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setManualPanelMode('batch');
+                  setBatchResult(null);
+                  setShowAddForm(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3.5 py-2 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/25"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                Importar Roteiros
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (showAddForm && manualPanelMode === 'single') {
+                    setShowAddForm(false);
+                  } else {
+                    setManualPanelMode('single');
+                    setShowAddForm(true);
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400"
+              >
+                <Plus className="h-4 w-4" />
+                Novo Exemplo Manual
+              </button>
+            </div>
           </div>
 
           {showAddForm && (
-            <form
-              onSubmit={handleAddManualExample}
-              className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900/80 p-5"
-            >
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-400">
-                    Quando o cliente perguntar / disser:
-                  </label>
-                  <textarea
-                    required
-                    rows={3}
-                    value={newCustomerMsg}
-                    onChange={(e) => setNewCustomerMsg(e.target.value)}
-                    placeholder="Ex: Vocês parcelam no cartão ou aceitam Pix?"
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-xs text-white"
-                  />
+            <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+              {/* Sub-abas dentro do painel Novo Exemplo Manual */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                <div className="inline-flex rounded-xl border border-slate-800 bg-slate-950 p-1 text-xs font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => setManualPanelMode('single')}
+                    className={`rounded-lg px-3 py-1.5 transition ${
+                      manualPanelMode === 'single'
+                        ? 'bg-emerald-500 text-slate-950'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Exemplo Único
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setManualPanelMode('batch');
+                      setBatchResult(null);
+                    }}
+                    className={`rounded-lg px-3 py-1.5 transition ${
+                      manualPanelMode === 'batch'
+                        ? 'bg-emerald-500 text-slate-950'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Importar Vários / Exportar &amp; Modelo
+                  </button>
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-emerald-300">
-                    Resposta ideal da IA:
-                  </label>
-                  <textarea
-                    required
-                    rows={3}
-                    value={newIdealResp}
-                    onChange={(e) => setNewIdealResp(e.target.value)}
-                    placeholder="Ex: Aceitamos Pix com 5% de desconto ou cartão de crédito em até 6x sem juros!"
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-xs text-white"
-                  />
-                </div>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <input
-                  value={newNote}
-                  onChange={(e) => setNewNote(e.target.value)}
-                  placeholder="Observação / regra extra (opcional)"
-                  className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
-                />
-                <select
-                  value={newRuleId}
-                  onChange={(e) => setNewRuleId(e.target.value)}
-                  className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
-                >
-                  <option value="">Global (aplicar em todas as regras)</option>
-                  {rules.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      Somente na regra: [{r.scope}] {r.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex justify-end gap-2">
+
                 <button
                   type="button"
                   onClick={() => setShowAddForm(false)}
-                  className="rounded-xl border border-slate-700 px-3.5 py-2 text-xs text-slate-300"
+                  className="text-slate-400 hover:text-white"
                 >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400"
-                >
-                  Salvar Exemplo
+                  <X className="h-4 w-4" />
                 </button>
               </div>
-            </form>
+
+              {manualPanelMode === 'single' ? (
+                <form onSubmit={handleAddManualExample} className="space-y-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-slate-400">
+                        Quando o cliente perguntar / disser:
+                      </label>
+                      <textarea
+                        required
+                        rows={3}
+                        value={newCustomerMsg}
+                        onChange={(e) => setNewCustomerMsg(e.target.value)}
+                        placeholder="Ex: Vocês parcelam no cartão ou aceitam Pix?"
+                        className="w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-emerald-300">
+                        Resposta ideal da IA:
+                      </label>
+                      <textarea
+                        required
+                        rows={3}
+                        value={newIdealResp}
+                        onChange={(e) => setNewIdealResp(e.target.value)}
+                        placeholder="Ex: Aceitamos Pix com 5% de desconto ou cartão de crédito em até 6x sem juros!"
+                        className="w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-xs text-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <input
+                      value={newNote}
+                      onChange={(e) => setNewNote(e.target.value)}
+                      placeholder="Observação / regra extra (opcional)"
+                      className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                    />
+                    <select
+                      value={newRuleId}
+                      onChange={(e) => setNewRuleId(e.target.value)}
+                      className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                    >
+                      <option value="">Global (aplicar em todas as regras)</option>
+                      {rules.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          Somente na regra: [{r.scope}] {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddForm(false)}
+                      className="rounded-xl border border-slate-700 px-3.5 py-2 text-xs text-slate-300"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      className="rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400"
+                    >
+                      Salvar Exemplo
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form onSubmit={handleBatchImport} className="space-y-4">
+                  {/* Bloco 1: Baixar Estrutura Aceitável + Exportar Existentes */}
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/70 p-3.5">
+                      <p className="text-xs font-bold text-white">
+                        1. Baixar Estrutura Modelo (Pronta para Preencher)
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        Baixe o arquivo já formatado com exemplos reais nos campos aceitos (<code>mensagem_cliente</code>, <code>resposta_ideal</code>, <code>observacao</code>, <code>regra</code>, <code>ativo</code>).
+                      </p>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void downloadFromApi(
+                              '/training/examples/template?format=csv',
+                              'modelo-roteiros-treinamento-zapflow.csv'
+                            )
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-3 py-1.5 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-500/25"
+                        >
+                          <FileSpreadsheet className="h-3.5 w-3.5" />
+                          Baixar Modelo CSV (Excel)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void downloadFromApi(
+                              '/training/examples/template?format=json',
+                              'modelo-roteiros-treinamento-zapflow.json'
+                            )
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/15 px-3 py-1.5 text-[11px] font-semibold text-sky-300 hover:bg-sky-500/25"
+                        >
+                          <FileJson className="h-3.5 w-3.5" />
+                          Baixar Modelo JSON
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/70 p-3.5">
+                      <p className="text-xs font-bold text-white">
+                        2. Exportar Roteiros Existentes ({examples.length})
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        Faça backup ou edite em lote seus roteiros já cadastrados — o arquivo exportado já segue a mesma estrutura aceita para reimportação.
+                      </p>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button
+                          type="button"
+                          disabled={examples.length === 0}
+                          onClick={() =>
+                            void downloadFromApi(
+                              '/training/examples/export?format=csv',
+                              'roteiros-treinamento-zapflow.csv'
+                            )
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+                        >
+                          <Download className="h-3.5 w-3.5 text-emerald-400" />
+                          Exportar Existentes (.csv)
+                        </button>
+                        <button
+                          type="button"
+                          disabled={examples.length === 0}
+                          onClick={() =>
+                            void downloadFromApi(
+                              '/training/examples/export?format=json',
+                              'roteiros-treinamento-zapflow.json'
+                            )
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+                        >
+                          <Download className="h-3.5 w-3.5 text-sky-400" />
+                          Exportar Existentes (.json)
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Bloco 2: Escolher arquivo ou colar */}
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-xs font-semibold text-slate-300">
+                        3. Envie o arquivo (.csv ou .json) ou cole o conteúdo abaixo
+                      </label>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-slate-700">
+                        <Upload className="h-3.5 w-3.5" />
+                        {batchFile ? batchFile.name : 'Selecionar arquivo .csv / .json'}
+                        <input
+                          type="file"
+                          accept=".csv,.json,.txt,text/csv,application/json"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0] || null;
+                            setBatchFile(f);
+                            if (f) setBatchText('');
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+                    <textarea
+                      rows={4}
+                      value={batchText}
+                      onChange={(e) => {
+                        setBatchText(e.target.value);
+                        if (batchFile) setBatchFile(null);
+                      }}
+                      placeholder={`Opcional: cole aqui seu CSV ou JSON diretamente...\nEx CSV:\nmensagem_cliente;resposta_ideal;observacao;regra;ativo\n"Qual o prazo de entrega?";"Entregamos em até 3 dias úteis para todo o Brasil.";"";Global;true`}
+                      className="w-full rounded-xl border border-slate-700 bg-slate-950 p-3 font-mono text-[11px] text-white placeholder-slate-500"
+                    />
+                  </div>
+
+                  {/* Bloco 3: Modo de Importação (Manter vs Sobrescrever) + Regra Padrão */}
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="block text-xs font-semibold text-slate-300">
+                        4. O que fazer com os exemplos já existentes?
+                      </label>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <button
+                          type="button"
+                          onClick={() => setBatchImportMode('KEEP')}
+                          className={`rounded-xl border p-3 text-left transition ${
+                            batchImportMode === 'KEEP'
+                              ? 'border-emerald-500 bg-emerald-500/15'
+                              : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                          }`}
+                        >
+                          <p className="text-xs font-bold text-white">
+                            Manter existentes
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-slate-400">
+                            Preserva os {examples.length} exemplo(s) atuais e soma os novos roteiros.
+                          </p>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setBatchImportMode('OVERWRITE')}
+                          className={`rounded-xl border p-3 text-left transition ${
+                            batchImportMode === 'OVERWRITE'
+                              ? 'border-amber-400 bg-amber-500/15'
+                              : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                          }`}
+                        >
+                          <p className="flex items-center gap-1 text-xs font-bold text-amber-200">
+                            <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
+                            Sobrescrever todos
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-slate-400">
+                            Remove todos os exemplos atuais e substitui pelos importados.
+                          </p>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="block text-xs font-semibold text-slate-300">
+                        Regra padrão (quando a coluna &quot;regra&quot; estiver vazia)
+                      </label>
+                      <select
+                        value={batchDefaultRuleId}
+                        onChange={(e) => setBatchDefaultRuleId(e.target.value)}
+                        className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-xs text-white"
+                      >
+                        <option value="">Global (aplicar em todas as regras)</option>
+                        {rules.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            [{r.scope}] {r.name}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[11px] text-slate-500">
+                        Se o arquivo já informar o nome exato de uma regra (ex: <em>Qualificação de Leads</em>), ela será vinculada automaticamente.
+                      </p>
+                    </div>
+                  </div>
+
+                  {batchResult && (
+                    <div
+                      className={`rounded-xl border px-3.5 py-2.5 text-xs ${
+                        batchResult.ok
+                          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                          : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                      }`}
+                    >
+                      {batchResult.ok ? '✓ ' : '✗ '}
+                      {batchResult.message}
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddForm(false)}
+                      className="rounded-xl border border-slate-700 px-3.5 py-2 text-xs text-slate-300"
+                    >
+                      Fechar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={importingBatch || (!batchFile && !batchText.trim())}
+                      className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition disabled:opacity-50 ${
+                        batchImportMode === 'OVERWRITE'
+                          ? 'bg-amber-400 text-slate-950 hover:bg-amber-300'
+                          : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
+                      }`}
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      {importingBatch
+                        ? 'Importando roteiros...'
+                        : batchImportMode === 'OVERWRITE'
+                          ? 'Sobrescrever e Importar Roteiros'
+                          : 'Importar e Manter Existentes'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
           )}
 
           {examples.length === 0 ? (

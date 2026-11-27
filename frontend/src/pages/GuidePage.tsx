@@ -486,6 +486,9 @@ export function GuidePage({ onNavigate, onOpenOnboarding }: Props) {
                   • <strong>Incorporar na Base:</strong> adicione conhecimento descoberto direto na Base de Conhecimento da regra com 1 clique.
                 </li>
                 <li>
+                  • <strong>Importar &amp; Exportar Roteiros em Lote:</strong> baixe o modelo pronto (<code>.csv</code> para Excel ou <code>.json</code>), exporte seus roteiros existentes e importe vários de uma vez escolhendo entre <strong>Manter existentes</strong> ou <strong>Sobrescrever todos</strong>.
+                </li>
+                <li>
                   • <strong>Few-Shot Automático &amp; Flexibilidade:</strong> exemplos ativos são injetados no prompt antes de cada resposta. Em <em>Configurações IA</em> (ou em cada <em>Tag/Fluxo</em>), escolha entre <strong>Fiel aos exemplos</strong>, <strong>Equilibrado</strong> ou <strong>Flexível e natural</strong> (mantém 100% da assertividade sem copiar texto ao pé da letra) e defina a tonalidade (Consultivo, Descontraído, Formal, Direto, Empático ou Comercial).
                 </li>
               </ul>
