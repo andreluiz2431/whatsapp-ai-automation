@@ -35,7 +35,9 @@ Aplicação web full-stack **multi-usuário**, **100% gratuita e open-source**, 
 - Métricas ao vivo (conversas ativas, enviadas/recebidas hoje, fila pendente, saúde do motor de IA), **Resumo Executivo do Dia com IA** e **Log de Atividades em Tempo Real**.
 
 ### 3. Gestão de Conversas + Importação de Histórico Antigo
-- Interface estilo chat em tempo real com alternância por conversa entre **Modo Automático (IA)** e **Modo Manual (Humano)**.
+- Interface estilo chat em tempo real com alternância por conversa entre **Modo Automático (IA)** e **Modo Manual (Humano)**, além de **botão Responder com IA** em 1 clique e **Fila de Pendência de Respostas da IA** acima das conversas exibindo ao vivo os estados `Na fila → Processando IA → Respondendo → Respondido`.
+- **Continuidade inteligente (últimos 20 min) e bloqueio de saudações repetidas no mesmo dia:** antes de responder, a IA analisa todo o andamento dos últimos 20 minutos (com horários de Brasília) e identifica automaticamente se já foi enviada mensagem no dia — evitando repetir *"Olá / Bom dia"* a cada interação.
+- **Alertas visuais amarelos clicáveis no Painel de Controle:** quando a condição de parada redireciona um cliente para atendimento humano (`needsHumanAttention`), o Painel exibe um banner amarelo destacado e clicável que abre diretamente a conversa (resolvido automaticamente ao responder ou pelo botão *Marcar atendido*).
 - Envio manual direto pelo painel com opção configurável de **Assumir Conversa automaticamente** (pausa a IA naquele chat ao enviar uma resposta humana).
 - **Resumo individual com IA**, atribuição de Tags/Grupos e seleção de fluxo específico por chat.
 - **Importação de conversas anteriores (botão Importar):** suporta upload de arquivo `.txt` exportado oficialmente do WhatsApp (Android e iOS, PT-BR e EN) ou texto colado (`Nome: mensagem`), com detecção automática de participantes para identificar quem é o atendente e preservação de datas/horários originais.

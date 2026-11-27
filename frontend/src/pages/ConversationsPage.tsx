@@ -1,8 +1,13 @@
 import {
+  AlertTriangle,
+  BellRing,
   Bot,
+  CheckCircle2,
   CheckSquare,
+  Clock,
   Eye,
   FileText,
+  Loader2,
   Megaphone,
   MessageSquarePlus,
   Mic,
@@ -18,17 +23,32 @@ import {
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { socket } from '../lib/socket';
-import { AiRule, Conversation, Message, Tag, WhatsAppState } from '../types';
+import {
+  AiReplyQueueItem,
+  AiRule,
+  Conversation,
+  Message,
+  Tag,
+  WhatsAppState,
+} from '../types';
 
 interface Props {
   waState: WhatsAppState;
   onUnreadChange: () => void;
+  initialConversationId?: string | null;
+  onConsumedInitialConversation?: () => void;
 }
 
-export function ConversationsPage({ waState, onUnreadChange }: Props) {
+export function ConversationsPage({
+  waState,
+  onUnreadChange,
+  initialConversationId,
+  onConsumedInitialConversation,
+}: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [replyQueue, setReplyQueue] = useState<AiReplyQueueItem[]>([]);
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [allRules, setAllRules] = useState<AiRule[]>([]);
   const [search, setSearch] = useState('');
@@ -87,10 +107,30 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
     }
   };
 
+  const loadReplyQueue = async () => {
+    try {
+      const data = await api.get<{ items: AiReplyQueueItem[] }>(
+        '/conversations/reply-queue'
+      );
+      setReplyQueue(data.items || []);
+    } catch {
+      // ignora
+    }
+  };
+
   useEffect(() => {
     void loadConversations();
     void loadMeta();
+    void loadReplyQueue();
   }, []);
+
+  useEffect(() => {
+    if (initialConversationId) {
+      setSelectedId(initialConversationId);
+      setShowTagsPanel(false);
+      onConsumedInitialConversation?.();
+    }
+  }, [initialConversationId, onConsumedInitialConversation]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -124,12 +164,17 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
     const onConvUpdated = () => {
       void loadConversations();
     };
+    const onReplyQueue = (items: AiReplyQueueItem[]) => {
+      setReplyQueue(Array.isArray(items) ? items : []);
+    };
 
     socket.on('message:new', onNewMessage);
     socket.on('conversation:updated', onConvUpdated);
+    socket.on('ai:reply-queue', onReplyQueue);
     return () => {
       socket.off('message:new', onNewMessage);
       socket.off('conversation:updated', onConvUpdated);
+      socket.off('ai:reply-queue', onReplyQueue);
     };
   }, [selectedId]);
 
@@ -383,6 +428,45 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
     }
   };
 
+  const handleClearCompletedQueue = async () => {
+    try {
+      const res = await api.post<{ items: AiReplyQueueItem[] }>(
+        '/conversations/reply-queue/clear'
+      );
+      setReplyQueue(res.items || []);
+    } catch {
+      // ignora
+    }
+  };
+
+  const handleResolveAttention = async (conversationId: string) => {
+    try {
+      const updated = await api.post<Conversation>(
+        `/conversations/${conversationId}/resolve-attention`
+      );
+      setConversations((prev) =>
+        prev.map((c) => (c.id === updated.id ? { ...c, ...updated } : c))
+      );
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : 'Erro ao marcar atenção humana como resolvida.'
+      );
+    }
+  };
+
+  const queuedOrProcessingCount = replyQueue.filter(
+    (i) => i.status === 'RECEIVED_QUEUED' || i.status === 'PROCESSING'
+  ).length;
+  const respondingCount = replyQueue.filter(
+    (i) => i.status === 'RESPONDING'
+  ).length;
+  const respondedCount = replyQueue.filter(
+    (i) => i.status === 'RESPONDED'
+  ).length;
+  const failedCount = replyQueue.filter((i) => i.status === 'FAILED').length;
+
   const filtered = conversations.filter((c) => {
     const q = search.toLowerCase();
     return (
@@ -393,7 +477,121 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
   });
 
   return (
-    <div className="mx-auto flex h-[calc(100vh-7rem)] max-w-7xl flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70 lg:h-[calc(100vh-3rem)] lg:flex-row">
+    <div className="mx-auto flex h-[calc(100vh-7rem)] max-w-7xl flex-col gap-3 lg:h-[calc(100vh-3rem)]">
+      {/* Bloco Superior: Fila de Pendência de Respostas da IA em Tempo Real */}
+      <div className="shrink-0 rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 text-xs font-bold text-white">
+              <Clock className="h-3.5 w-3.5 text-emerald-400" />
+              Fila de Pendência de Respostas (IA)
+            </span>
+            <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold text-violet-300">
+              Processando: {queuedOrProcessingCount}
+            </span>
+            <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-sky-300">
+              Respondendo: {respondingCount}
+            </span>
+            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+              Respondidos: {respondedCount}
+            </span>
+            {failedCount > 0 && (
+              <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                Erros: {failedCount}
+              </span>
+            )}
+          </div>
+
+          {(respondedCount > 0 || failedCount > 0) && (
+            <button
+              type="button"
+              onClick={handleClearCompletedQueue}
+              className="text-[11px] font-medium text-slate-400 transition hover:text-white"
+            >
+              Limpar concluídos
+            </button>
+          )}
+        </div>
+
+        {replyQueue.length === 0 ? (
+          <p className="mt-2 text-[11px] text-slate-500">
+            Nenhuma mensagem em processamento no momento. Quando um cliente enviar mensagem com a IA ativa, o status (Na fila → Processando → Respondendo → Respondido) aparecerá aqui ao vivo.
+          </p>
+        ) : (
+          <div className="mt-2.5 flex gap-2 overflow-x-auto pb-1">
+            {replyQueue.map((item) => {
+              const badgeMeta =
+                item.status === 'RECEIVED_QUEUED'
+                  ? {
+                      label: 'Na fila',
+                      cls: 'border-amber-500/35 bg-amber-500/10 text-amber-200',
+                      icon: <Clock className="h-3 w-3 text-amber-300" />,
+                    }
+                  : item.status === 'PROCESSING'
+                    ? {
+                        label: 'Processando IA',
+                        cls: 'border-violet-500/40 bg-violet-500/15 text-violet-200',
+                        icon: (
+                          <Loader2 className="h-3 w-3 animate-spin text-violet-300" />
+                        ),
+                      }
+                    : item.status === 'RESPONDING'
+                      ? {
+                          label: 'Respondendo...',
+                          cls: 'border-sky-500/40 bg-sky-500/15 text-sky-200',
+                          icon: (
+                            <span className="h-2 w-2 animate-ping rounded-full bg-sky-400" />
+                          ),
+                        }
+                      : item.status === 'RESPONDED'
+                        ? {
+                            label: 'Respondido',
+                            cls: 'border-emerald-500/35 bg-emerald-500/10 text-emerald-200',
+                            icon: (
+                              <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+                            ),
+                          }
+                        : {
+                            label: 'Falha',
+                            cls: 'border-rose-500/40 bg-rose-500/15 text-rose-200',
+                            icon: (
+                              <AlertTriangle className="h-3 w-3 text-rose-400" />
+                            ),
+                          };
+
+              return (
+                <button
+                  key={item.conversationId}
+                  type="button"
+                  title={item.detail || item.lastIncomingPreview}
+                  onClick={() => {
+                    setSelectionMode(false);
+                    setSelectedId(item.conversationId);
+                  }}
+                  className={`flex shrink-0 items-center gap-2 rounded-xl border px-3 py-1.5 text-left transition hover:brightness-110 ${badgeMeta.cls}`}
+                >
+                  {badgeMeta.icon}
+                  <div className="max-w-[180px]">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-[11px] font-bold text-white">
+                        {item.contactName}
+                      </span>
+                      <span className="text-[10px] font-semibold opacity-90">
+                        • {badgeMeta.label}
+                      </span>
+                    </div>
+                    <p className="truncate text-[10px] opacity-75">
+                      {item.detail || item.lastIncomingPreview}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70 lg:flex-row">
       {/* Coluna Esquerda: Lista de Conversas */}
       <div className="flex w-full flex-col border-b border-slate-800 lg:w-80 lg:shrink-0 lg:border-r lg:border-b-0">
         <div className="space-y-3 border-b border-slate-800 p-4">
@@ -533,7 +731,9 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
                       ? 'bg-emerald-500/15'
                       : isSelected
                         ? 'bg-emerald-500/10'
-                        : 'hover:bg-slate-800/40'
+                        : conv.needsHumanAttention
+                          ? 'bg-amber-500/10 hover:bg-amber-500/15'
+                          : 'hover:bg-slate-800/40'
                   }`}
                 >
                   {selectionMode && (
@@ -581,6 +781,11 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
                           </>
                         )}
                       </span>
+                      {conv.needsHumanAttention && (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300 ring-1 ring-amber-400/40">
+                          <BellRing className="h-2.5 w-2.5" /> Atenção Humana
+                        </span>
+                      )}
                       {(conv.contact.tags || []).slice(0, 2).map(({ tag }) => (
                         <span
                           key={tag.id}
@@ -685,6 +890,28 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
                 </button>
               </div>
             </div>
+
+            {/* Alerta Amarelo dentro do Chat quando transferido para Humano */}
+            {selectedConv.needsHumanAttention && (
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-400/40 bg-amber-500/15 px-5 py-2.5 text-xs">
+                <div className="flex items-center gap-2 text-amber-200">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+                  <span>
+                    <strong>Atenção Humana solicitada:</strong>{' '}
+                    {selectedConv.humanAttentionReason ||
+                      'Conversa redirecionada para um atendente humano.'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleResolveAttention(selectedConv.id)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-amber-400 px-3 py-1 text-[11px] font-bold text-slate-950 transition hover:bg-amber-300"
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Marcar como atendido
+                </button>
+              </div>
+            )}
 
             {/* Painel retrátil de Tags & Fluxo */}
             {showTagsPanel && (
@@ -1138,6 +1365,7 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
           </form>
         </div>
       )}
+      </div>
     </div>
   );
 }

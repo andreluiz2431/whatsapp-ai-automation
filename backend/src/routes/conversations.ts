@@ -286,6 +286,63 @@ conversationsRouter.post('/import', async (req, res) => {
   }
 });
 
+conversationsRouter.get('/reply-queue', (req, res) => {
+  const userId = req.user!.id;
+  const items = whatsappManager.getSession(userId).getReplyQueue();
+  res.json({ items });
+});
+
+conversationsRouter.post('/reply-queue/clear', (req, res) => {
+  const userId = req.user!.id;
+  const items = whatsappManager.getSession(userId).clearCompletedReplyQueue();
+  res.json({ items });
+});
+
+conversationsRouter.post('/:id/resolve-attention', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const { id } = req.params;
+    const existing = await prisma.conversation.findFirst({
+      where: { id, userId },
+      include: { contact: true },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Conversa não encontrada.' });
+      return;
+    }
+
+    const updated = await prisma.conversation.update({
+      where: { id },
+      data: {
+        needsHumanAttention: false,
+        humanAttentionReason: null,
+        humanAttentionAt: null,
+      },
+      include: {
+        contact: { include: { tags: { include: { tag: true } } } },
+        activeRule: true,
+      },
+    });
+
+    emitUserEvent(userId, 'conversation:updated', updated);
+    emitUserEvent(userId, 'dashboard:refresh', {});
+    await logActivity(
+      userId,
+      'SYSTEM',
+      `Alerta de atenção humana marcado como resolvido para ${existing.contact.name || existing.contact.phone}.`,
+      'SUCCESS'
+    );
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Erro ao resolver alerta de atenção humana.',
+    });
+  }
+});
+
 conversationsRouter.get('/:id/messages', async (req, res) => {
   try {
     const userId = req.user!.id;
@@ -372,7 +429,16 @@ conversationsRouter.patch('/bulk-mode', async (req, res) => {
 
     const result = await prisma.conversation.updateMany({
       where: { id: { in: conversationIds }, userId },
-      data: { mode },
+      data: {
+        mode,
+        ...(mode === 'AUTO'
+          ? {
+              needsHumanAttention: false,
+              humanAttentionReason: null,
+              humanAttentionAt: null,
+            }
+          : {}),
+      },
     });
 
     emitUserEvent(userId, 'conversation:updated', { bulk: true });
@@ -427,6 +493,13 @@ conversationsRouter.patch('/:id/mode', async (req, res) => {
       where: { id },
       data: {
         mode,
+        ...(mode === 'AUTO'
+          ? {
+              needsHumanAttention: false,
+              humanAttentionReason: null,
+              humanAttentionAt: null,
+            }
+          : {}),
         ...(activeRuleId !== undefined ? { activeRuleId: activeRuleId || null } : {}),
       },
       include: {
@@ -453,6 +526,7 @@ conversationsRouter.patch('/:id/mode', async (req, res) => {
     };
 
     emitUserEvent(userId, 'conversation:updated', enriched);
+    emitUserEvent(userId, 'dashboard:refresh', {});
     await logActivity(
       userId,
       'SYSTEM',
@@ -553,6 +627,7 @@ conversationsRouter.patch('/:id/contact', async (req, res) => {
           : null,
       };
       emitUserEvent(userId, 'conversation:updated', enriched);
+    emitUserEvent(userId, 'dashboard:refresh', {});
       res.json(enriched);
       return;
     }

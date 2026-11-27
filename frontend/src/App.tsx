@@ -46,6 +46,9 @@ export default function App() {
     useState<CampaignRuntimeState>(INITIAL_RUNTIME);
   const [aiUsage, setAiUsage] = useState<AiUsageSummary | null>(null);
   const [unreadTotal, setUnreadTotal] = useState(0);
+  const [focusConversationId, setFocusConversationId] = useState<string | null>(
+    null
+  );
 
   const refreshUnread = useCallback(async () => {
     try {
@@ -164,10 +167,19 @@ export default function App() {
             campaignRuntime={campaignRuntime}
             onToggleGlobalPause={handleToggleGlobalPause}
             onGoToSettings={() => setActiveTab('settings')}
+            onOpenConversation={(convId) => {
+              setFocusConversationId(convId);
+              setActiveTab('conversations');
+            }}
           />
         )}
         {activeTab === 'conversations' && (
-          <ConversationsPage waState={waState} onUnreadChange={refreshUnread} />
+          <ConversationsPage
+            waState={waState}
+            onUnreadChange={refreshUnread}
+            initialConversationId={focusConversationId}
+            onConsumedInitialConversation={() => setFocusConversationId(null)}
+          />
         )}
         {activeTab === 'rules' && <RulesPage />}
         {activeTab === 'training' && <TrainingPage />}

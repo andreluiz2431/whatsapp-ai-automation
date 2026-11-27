@@ -37,6 +37,7 @@ dashboardRouter.get('/overview', async (req, res) => {
       settings,
       logs,
       aiHealth,
+      attentionConversations,
     ] = await Promise.all([
       prisma.conversation.count({ where: { userId } }),
       prisma.conversation.count({ where: { userId, mode: 'AUTO' } }),
@@ -67,7 +68,25 @@ dashboardRouter.get('/overview', async (req, res) => {
         take: 60,
       }),
       checkAiHealth(userId),
+      prisma.conversation.findMany({
+        where: { userId, needsHumanAttention: true },
+        orderBy: { humanAttentionAt: 'desc' },
+        include: { contact: true },
+        take: 20,
+      }),
     ]);
+
+    const humanAttentionAlerts = attentionConversations.map((c) => ({
+      conversationId: c.id,
+      contactName: c.contact.name || c.contact.phone,
+      contactPhone: c.contact.phone,
+      reason:
+        c.humanAttentionReason ||
+        'Conversa redirecionada para atendimento humano.',
+      lastMessagePreview: c.lastMessagePreview,
+      since: (c.humanAttentionAt || c.updatedAt).toISOString(),
+      unreadCount: c.unreadCount,
+    }));
 
     res.json({
       metrics: {
@@ -79,6 +98,7 @@ dashboardRouter.get('/overview', async (req, res) => {
       },
       aiHealth,
       campaignRuntime: campaignQueueManager.getRunner(userId).getRuntimeState(),
+      humanAttentionAlerts,
       dailySummary: {
         text: settings.lastDailySummary || null,
         updatedAt: settings.lastDailySummaryAt || null,

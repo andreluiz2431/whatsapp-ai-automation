@@ -25,6 +25,23 @@ import {
 
 const logger = pino({ level: 'silent' });
 
+export type AiReplyQueueStatus =
+  | 'RECEIVED_QUEUED'
+  | 'PROCESSING'
+  | 'RESPONDING'
+  | 'RESPONDED'
+  | 'FAILED';
+
+export interface AiReplyQueueItem {
+  conversationId: string;
+  contactName: string;
+  contactPhone: string;
+  lastIncomingPreview: string;
+  status: AiReplyQueueStatus;
+  detail?: string;
+  updatedAt: string;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -197,10 +214,72 @@ class UserWhatsAppSession {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private campaignRunning = false;
   private pendingAiTimers = new Map<string, NodeJS.Timeout>();
+  private replyQueue = new Map<string, AiReplyQueueItem>();
 
   constructor(userId: string) {
     this.userId = userId;
     this.sessionPath = path.join(config.sessionDir, userId);
+  }
+
+  public getReplyQueue(): AiReplyQueueItem[] {
+    const cutoff = Date.now() - 30 * 60 * 1000;
+    for (const [key, item] of this.replyQueue.entries()) {
+      if (
+        (item.status === 'RESPONDED' || item.status === 'FAILED') &&
+        new Date(item.updatedAt).getTime() < cutoff
+      ) {
+        this.replyQueue.delete(key);
+      }
+    }
+
+    const priority: Record<AiReplyQueueStatus, number> = {
+      RESPONDING: 0,
+      PROCESSING: 1,
+      RECEIVED_QUEUED: 2,
+      FAILED: 3,
+      RESPONDED: 4,
+    };
+
+    return Array.from(this.replyQueue.values())
+      .sort((a, b) => {
+        const diff = priority[a.status] - priority[b.status];
+        if (diff !== 0) return diff;
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      })
+      .slice(0, 15);
+  }
+
+  public clearCompletedReplyQueue(): AiReplyQueueItem[] {
+    for (const [key, item] of this.replyQueue.entries()) {
+      if (item.status === 'RESPONDED' || item.status === 'FAILED') {
+        this.replyQueue.delete(key);
+      }
+    }
+    const list = this.getReplyQueue();
+    emitUserEvent(this.userId, 'ai:reply-queue', list);
+    return list;
+  }
+
+  private setReplyQueueItem(item: AiReplyQueueItem): void {
+    this.replyQueue.set(item.conversationId, item);
+    if (this.replyQueue.size > 25) {
+      const oldest = Array.from(this.replyQueue.values())
+        .filter((i) => i.status === 'RESPONDED' || i.status === 'FAILED')
+        .sort(
+          (a, b) =>
+            new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime()
+        )[0];
+      if (oldest) {
+        this.replyQueue.delete(oldest.conversationId);
+      }
+    }
+    emitUserEvent(this.userId, 'ai:reply-queue', this.getReplyQueue());
+  }
+
+  private removeReplyQueueItem(conversationId: string): void {
+    if (this.replyQueue.delete(conversationId)) {
+      emitUserEvent(this.userId, 'ai:reply-queue', this.getReplyQueue());
+    }
   }
 
   public hasSavedSession(): boolean {
@@ -513,11 +592,17 @@ class UserWhatsAppSession {
       lastMessageAt: Date;
       lastMessagePreview: string;
       unreadCount: number;
+      needsHumanAttention: boolean;
+      humanAttentionReason: null;
+      humanAttentionAt: null;
       mode?: string;
     } = {
       lastMessageAt: new Date(),
       lastMessagePreview: body.slice(0, 120),
       unreadCount: 0,
+      needsHumanAttention: false,
+      humanAttentionReason: null,
+      humanAttentionAt: null,
     };
 
     if (settings?.autoPauseOnManualSend && conversation.mode === 'AUTO') {
@@ -814,9 +899,25 @@ class UserWhatsAppSession {
         clearTimeout(existingTimer);
       }
 
+      this.setReplyQueueItem({
+        conversationId: conversation.id,
+        contactName: contactLabel,
+        contactPhone: contact.phone,
+        lastIncomingPreview: body.slice(0, 80),
+        status: 'RECEIVED_QUEUED',
+        detail: 'Mensagem recebida — na fila de processamento',
+        updatedAt: new Date().toISOString(),
+      });
+
       const timer = setTimeout(() => {
         this.pendingAiTimers.delete(conversation.id);
-        void this.respondWithAi(conversation.id, contact.jid, contactLabel);
+        void this.respondWithAi(
+          conversation.id,
+          contact.jid,
+          contactLabel,
+          contact.phone,
+          body.slice(0, 80)
+        );
       }, 2500);
 
       this.pendingAiTimers.set(conversation.id, timer);
@@ -846,76 +947,169 @@ class UserWhatsAppSession {
       throw new Error('Conversa não encontrada.');
     }
     const contactLabel = conv.contact.name || conv.contact.phone;
-    const reply = await generateConversationReply(this.userId, conversationId);
-    const waMessageId = await this.simulateTypingAndSend(
-      conv.contact.jid,
-      reply.text,
-      true
-    );
+    const preview = conv.lastMessagePreview || 'Resposta acionada manualmente';
 
-    const savedOut = await prisma.message.create({
-      data: {
+    try {
+      this.setReplyQueueItem({
         conversationId,
-        waMessageId: waMessageId || undefined,
-        direction: 'OUTBOUND',
-        senderType: 'AI',
-        body: reply.text,
-        status: 'SENT',
-      },
-    });
+        contactName: contactLabel,
+        contactPhone: conv.contact.phone,
+        lastIncomingPreview: preview,
+        status: 'PROCESSING',
+        detail: 'Analisando últimos 20 min e gerando resposta...',
+        updatedAt: new Date().toISOString(),
+      });
 
-    const updatedConv = await prisma.conversation.update({
-      where: { id: conversationId },
-      data: {
-        lastMessageAt: new Date(),
-        lastMessagePreview: reply.text.slice(0, 120),
-        ...(reply.shouldTransferToHuman ? { mode: 'MANUAL' } : {}),
-      },
-      include: {
-        contact: { include: { tags: { include: { tag: true } } } },
-        activeRule: true,
-      },
-    });
+      const reply = await generateConversationReply(this.userId, conversationId);
 
-    emitUserEvent(this.userId, 'message:new', savedOut);
-    emitUserEvent(this.userId, 'conversation:updated', updatedConv);
-    emitUserEvent(this.userId, 'dashboard:refresh', {});
+      this.setReplyQueueItem({
+        conversationId,
+        contactName: contactLabel,
+        contactPhone: conv.contact.phone,
+        lastIncomingPreview: preview,
+        status: 'RESPONDING',
+        detail: 'Digitando e enviando resposta no WhatsApp...',
+        updatedAt: new Date().toISOString(),
+      });
 
-    await logActivity(
-      this.userId,
-      'AI',
-      `IA respondeu ${contactLabel} (Regra ${reply.ruleLevel}: ${reply.ruleName}).`,
-      'SUCCESS'
-    );
+      const waMessageId = await this.simulateTypingAndSend(
+        conv.contact.jid,
+        reply.text,
+        true
+      );
 
-    return {
-      message: savedOut,
-      ruleName: reply.ruleName,
-      ruleLevel: reply.ruleLevel,
-    };
+      const savedOut = await prisma.message.create({
+        data: {
+          conversationId,
+          waMessageId: waMessageId || undefined,
+          direction: 'OUTBOUND',
+          senderType: 'AI',
+          body: reply.text,
+          status: 'SENT',
+        },
+      });
+
+      const updatedConv = await prisma.conversation.update({
+        where: { id: conversationId },
+        data: {
+          lastMessageAt: new Date(),
+          lastMessagePreview: reply.text.slice(0, 120),
+          ...(reply.shouldTransferToHuman
+            ? {
+                mode: 'MANUAL',
+                needsHumanAttention: true,
+                humanAttentionAt: new Date(),
+                humanAttentionReason: `Regra "${reply.ruleName}" redirecionou para atendimento humano.`,
+              }
+            : {}),
+        },
+        include: {
+          contact: { include: { tags: { include: { tag: true } } } },
+          activeRule: true,
+        },
+      });
+
+      this.setReplyQueueItem({
+        conversationId,
+        contactName: contactLabel,
+        contactPhone: conv.contact.phone,
+        lastIncomingPreview: preview,
+        status: 'RESPONDED',
+        detail: reply.shouldTransferToHuman
+          ? 'Respondido • Redirecionado p/ Humano'
+          : `Respondido (${reply.ruleName})`,
+        updatedAt: new Date().toISOString(),
+      });
+
+      emitUserEvent(this.userId, 'message:new', savedOut);
+      emitUserEvent(this.userId, 'conversation:updated', updatedConv);
+      emitUserEvent(this.userId, 'dashboard:refresh', {});
+
+      await logActivity(
+        this.userId,
+        'AI',
+        `IA respondeu ${contactLabel} (Regra ${reply.ruleLevel}: ${reply.ruleName}).`,
+        'SUCCESS'
+      );
+
+      if (reply.shouldTransferToHuman) {
+        await logActivity(
+          this.userId,
+          'AI',
+          `Condição de parada atingida para ${contactLabel}. Alerta de atenção humana ativado no Painel.`,
+          'WARN'
+        );
+      }
+
+      return {
+        message: savedOut,
+        ruleName: reply.ruleName,
+        ruleLevel: reply.ruleLevel,
+      };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Erro desconhecido';
+      this.setReplyQueueItem({
+        conversationId,
+        contactName: contactLabel,
+        contactPhone: conv.contact.phone,
+        lastIncomingPreview: preview,
+        status: 'FAILED',
+        detail: errMsg.slice(0, 120),
+        updatedAt: new Date().toISOString(),
+      });
+      throw err;
+    }
   }
 
   private async respondWithAi(
     conversationId: string,
     jid: string,
-    contactLabel: string
+    contactLabel: string,
+    contactPhone = '',
+    lastIncomingPreview = ''
   ): Promise<void> {
     try {
       const [settings, conv] = await Promise.all([
         prisma.userSettings.findUnique({ where: { userId: this.userId } }),
         prisma.conversation.findFirst({
           where: { id: conversationId, userId: this.userId },
+          include: { contact: true },
         }),
       ]);
+
+      const phone = contactPhone || conv?.contact.phone || '';
+      const preview = lastIncomingPreview || conv?.lastMessagePreview || '';
 
       if (!conv || conv.mode !== 'AUTO' || settings?.globalAutomationPaused) {
         console.log(
           `[WhatsApp][AI] Ignorando resposta para ${contactLabel} (mode=${conv?.mode}, globalPaused=${settings?.globalAutomationPaused})`
         );
+        this.removeReplyQueueItem(conversationId);
         return;
       }
 
+      this.setReplyQueueItem({
+        conversationId,
+        contactName: contactLabel,
+        contactPhone: phone,
+        lastIncomingPreview: preview,
+        status: 'PROCESSING',
+        detail: 'Analisando últimos 20 min e gerando resposta...',
+        updatedAt: new Date().toISOString(),
+      });
+
       const reply = await generateConversationReply(this.userId, conversationId);
+
+      this.setReplyQueueItem({
+        conversationId,
+        contactName: contactLabel,
+        contactPhone: phone,
+        lastIncomingPreview: preview,
+        status: 'RESPONDING',
+        detail: 'Digitando e enviando resposta no WhatsApp...',
+        updatedAt: new Date().toISOString(),
+      });
+
       const waMessageId = await this.simulateTypingAndSend(jid, reply.text, true);
 
       const savedOut = await prisma.message.create({
@@ -934,12 +1128,31 @@ class UserWhatsAppSession {
         data: {
           lastMessageAt: new Date(),
           lastMessagePreview: reply.text.slice(0, 120),
-          ...(reply.shouldTransferToHuman ? { mode: 'MANUAL' } : {}),
+          ...(reply.shouldTransferToHuman
+            ? {
+                mode: 'MANUAL',
+                needsHumanAttention: true,
+                humanAttentionAt: new Date(),
+                humanAttentionReason: `Regra "${reply.ruleName}" redirecionou para atendimento humano.`,
+              }
+            : {}),
         },
         include: {
           contact: { include: { tags: { include: { tag: true } } } },
           activeRule: true,
         },
+      });
+
+      this.setReplyQueueItem({
+        conversationId,
+        contactName: contactLabel,
+        contactPhone: phone,
+        lastIncomingPreview: preview,
+        status: 'RESPONDED',
+        detail: reply.shouldTransferToHuman
+          ? 'Respondido • Redirecionado p/ Humano'
+          : `Respondido (${reply.ruleName})`,
+        updatedAt: new Date().toISOString(),
       });
 
       emitUserEvent(this.userId, 'message:new', savedOut);
@@ -957,7 +1170,7 @@ class UserWhatsAppSession {
         await logActivity(
           this.userId,
           'AI',
-          `Condição de parada atingida para ${contactLabel}. Conversa transferida para modo Manual.`,
+          `Condição de parada atingida para ${contactLabel}. Conversa transferida para modo Manual com alerta no Painel.`,
           'WARN'
         );
       }
@@ -970,6 +1183,15 @@ class UserWhatsAppSession {
     } catch (err) {
       const errMsg =
         err instanceof Error ? err.message : 'Erro desconhecido';
+      this.setReplyQueueItem({
+        conversationId,
+        contactName: contactLabel,
+        contactPhone: contactPhone || '',
+        lastIncomingPreview: lastIncomingPreview || '',
+        status: 'FAILED',
+        detail: errMsg.slice(0, 120),
+        updatedAt: new Date().toISOString(),
+      });
       console.error(
         `[WhatsApp][AI] Falha na resposta da IA para ${contactLabel} (${jid}):`,
         errMsg

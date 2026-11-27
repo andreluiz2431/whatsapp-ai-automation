@@ -61,6 +61,71 @@ export interface AiHealthStatus {
 }
 
 const TRANSFER_TOKEN = '[TRANSFERIR_HUMANO]';
+const BRAZIL_TZ = 'America/Sao_Paulo';
+
+export interface ConversationRuntimeContext {
+  alreadySentToday: boolean;
+  recent20MinTranscript: string;
+  recent20MinCount: number;
+  currentTimeBrt: string;
+}
+
+function getStartOfTodayBrt(now = new Date()): Date {
+  // Obtém YYYY-MM-DD no fuso de São Paulo (UTC-3)
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: BRAZIL_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const year = Number(parts.find((p) => p.type === 'year')?.value || now.getUTCFullYear());
+  const month = Number(parts.find((p) => p.type === 'month')?.value || now.getUTCMonth() + 1);
+  const day = Number(parts.find((p) => p.type === 'day')?.value || now.getUTCDate());
+  // 00:00:00 BRT = 03:00:00 UTC (Brasil não adota horário de verão atualmente)
+  return new Date(Date.UTC(year, month - 1, day, 3, 0, 0, 0));
+}
+
+function formatBrtTime(date: Date): string {
+  try {
+    return new Intl.DateTimeFormat('pt-BR', {
+      timeZone: BRAZIL_TZ,
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date);
+  } catch {
+    return date.toTimeString().slice(0, 5);
+  }
+}
+
+/**
+ * Rede de segurança: se já enviamos mensagem hoje para este contato e o modelo ainda
+ * iniciar a resposta com uma saudação redundante ("Olá! Tudo bem? ..."), remove apenas
+ * a saudação inicial preservando integralmente o restante da resposta.
+ */
+function stripRedundantGreeting(text: string, contactName?: string | null): string {
+  const trimmed = text.trim();
+  if (!trimmed) return trimmed;
+
+  const firstName = (contactName || '').trim().split(/\s+/)[0] || '';
+  const escapedName = firstName
+    ? firstName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    : '';
+
+  const namePart = escapedName ? `(?:\\s+${escapedName})?` : '(?:\\s+[A-ZÀ-Ú][a-zà-ú]+)?';
+  const greetingRegex = new RegExp(
+    `^(?:ol[áa]|oi+|oie+|e\\s+a[íi]|fala|bom\\s+dia|boa\\s+tarde|boa\\s+noite|sauda[çc][õo]es)(?:[,!\\s]+${namePart})?[,!\\s.]*(?:(?:tudo\\s+(?:bem|certo|ótimo|joia)|como\\s+(?:vai|está|voce\\s+est[áa]|voc[êe]\\s+est[áa]))[?!.,\\s]*)?`,
+    'i'
+  );
+
+  const match = trimmed.match(greetingRegex);
+  if (!match || match[0].length === 0) return trimmed;
+
+  const remainder = trimmed.slice(match[0].length).replace(/^[\s,.\-–—!:;]+/, '').trim();
+  // Só remove se restar conteúdo real de resposta (evita esvaziar mensagens muito curtas)
+  if (remainder.length < 12) return trimmed;
+
+  return remainder.charAt(0).toUpperCase() + remainder.slice(1);
+}
 
 const TONE_DIRECTIVES: Record<string, string> = {
   CONSULTATIVE:
@@ -235,7 +300,8 @@ function buildSystemPrompt(
   rule: AiRule | null,
   contactName: string | null,
   trainingExamples: AiTrainingExample[] = [],
-  settings?: UserSettings | null
+  settings?: UserSettings | null,
+  runtimeContext?: ConversationRuntimeContext
 ): string {
   const objective =
     rule?.objective ||
@@ -286,6 +352,28 @@ function buildSystemPrompt(
         ].join('\n')
       : '';
 
+  const continuityBlockLines: string[] = [];
+  if (runtimeContext) {
+    continuityBlockLines.push('', '### CONTINUIDADE DA CONVERSA E REGRA DE SAUDAÇÃO');
+    continuityBlockLines.push(`- Horário atual (Brasília): ${runtimeContext.currentTimeBrt}.`);
+    if (runtimeContext.alreadySentToday) {
+      continuityBlockLines.push(
+        '- REGRA CRÍTICA DE SAUDAÇÃO: JÁ FOI ENVIADA MENSAGEM PARA ESTE CONTATO HOJE. É PROIBIDO iniciar a resposta com saudações repetitivas como "Olá", "Oi", "Bom dia", "Boa tarde", "Boa noite" ou "Tudo bem?". Continue a conversa diretamente de onde ela parou.'
+      );
+    } else {
+      continuityBlockLines.push(
+        '- Ainda não foi enviada nenhuma mensagem nossa para este contato hoje. Se for o primeiro contato do dia, você pode fazer uma saudação breve e natural.'
+      );
+    }
+
+    if (runtimeContext.recent20MinTranscript) {
+      continuityBlockLines.push(
+        `- ANDAMENTO DOS ÚLTIMOS 20 MINUTOS (${runtimeContext.recent20MinCount} mensagem(ns)): analise TODO o contexto abaixo antes de responder — NÃO responda olhando apenas a última mensagem isolada. Evite repetir perguntas ou informações já ditas:`,
+        runtimeContext.recent20MinTranscript
+      );
+    }
+  }
+
   return [
     'Você é um assistente virtual de atendimento no WhatsApp.',
     contactName ? `Nome do contato: ${contactName}.` : '',
@@ -295,6 +383,7 @@ function buildSystemPrompt(
     '',
     '### TOM DE VOZ E ESTILO DE RESPOSTA',
     ...toneBlockLines,
+    ...continuityBlockLines,
     '',
     '### INFORMAÇÕES DE CONTEXTO / BASE DE CONHECIMENTO',
     knowledge,
@@ -306,6 +395,7 @@ function buildSystemPrompt(
     '### REGRAS OBRIGATÓRIAS DE RESPOSTA',
     '- Responda em português do Brasil (a menos que o cliente escreva em outro idioma).',
     '- Mantenha as mensagens naturais e fáceis de ler no WhatsApp (evite blocos enormes de texto ou markdown excessivo).',
+    '- Sempre considere o andamento completo da conversa (especialmente os últimos 20 minutos) antes de responder, garantindo coerência e evitando repetir perguntas ou saudações.',
     '- Mesmo ao variar ou adaptar a forma de escrever, mantenha 100% de assertividade nas informações, valores, prazos e regras da base de conhecimento e dos exemplos.',
     '- Não invente preços, promessas ou dados que não estejam na base de conhecimento.',
     `- Se a CONDIÇÃO DE PARADA for atingida, informe educadamente que um atendente humano dará continuidade e inclua exatamente a tag ${TRANSFER_TOKEN} no final da mensagem.`,
@@ -724,16 +814,30 @@ export async function generateConversationReply(
   userId: string,
   conversationId: string
 ): Promise<AiReplyResult> {
-  const conversation = await prisma.conversation.findFirst({
-    where: { id: conversationId, userId },
-    include: {
-      contact: true,
-      messages: {
-        orderBy: { createdAt: 'desc' },
-        take: 20,
+  const now = new Date();
+  const startOfTodayBrt = getStartOfTodayBrt(now);
+  const twentyMinAgo = new Date(now.getTime() - 20 * 60 * 1000);
+
+  const [conversation, outboundToday] = await Promise.all([
+    prisma.conversation.findFirst({
+      where: { id: conversationId, userId },
+      include: {
+        contact: true,
+        messages: {
+          orderBy: { createdAt: 'desc' },
+          take: 30,
+        },
       },
-    },
-  });
+    }),
+    prisma.message.findFirst({
+      where: {
+        conversationId,
+        direction: 'OUTBOUND',
+        createdAt: { gte: startOfTodayBrt },
+      },
+      select: { id: true },
+    }),
+  ]);
 
   if (!conversation) {
     throw new Error('Conversa não encontrada.');
@@ -749,15 +853,49 @@ export async function generateConversationReply(
     getUserSettings(userId),
     getTrainingExamplesForRule(userId, rule?.id),
   ]);
+
+  const ordered = [...conversation.messages].reverse();
+  const alreadySentToday =
+    Boolean(outboundToday) ||
+    ordered.some(
+      (m) => m.direction === 'OUTBOUND' && m.createdAt >= startOfTodayBrt
+    );
+
+  const recent20MinMsgs = ordered.filter((m) => m.createdAt >= twentyMinAgo);
+  const recent20MinTranscript = recent20MinMsgs
+    .map((m) => {
+      const who =
+        m.direction === 'INBOUND'
+          ? 'Cliente'
+          : m.senderType === 'HUMAN'
+            ? 'Atendente Humano'
+            : m.senderType === 'CAMPAIGN'
+              ? 'Campanha'
+              : 'Você/IA';
+      const extras: string[] = [];
+      if (m.imageAnalysis) extras.push(`[Imagem: ${m.imageAnalysis}]`);
+      if (m.audioTranscript) extras.push(`[Áudio: ${m.audioTranscript}]`);
+      const extraText = extras.length > 0 ? ` ${extras.join(' ')}` : '';
+      return `  [${formatBrtTime(m.createdAt)}] ${who}: ${m.body}${extraText}`;
+    })
+    .join('\n');
+
+  const runtimeContext: ConversationRuntimeContext = {
+    alreadySentToday,
+    recent20MinTranscript,
+    recent20MinCount: recent20MinMsgs.length,
+    currentTimeBrt: formatBrtTime(now),
+  };
+
   const style = resolveResponseStyle(rule, settings);
   const systemPrompt = buildSystemPrompt(
     rule,
     conversation.contact.name,
     examples,
-    settings
+    settings,
+    runtimeContext
   );
 
-  const ordered = [...conversation.messages].reverse();
   const turns: ChatTurn[] = [];
   for (const msg of ordered) {
     const role: 'user' | 'assistant' =
@@ -769,8 +907,10 @@ export async function generateConversationReply(
     if (msg.audioTranscript) {
       extras.push(`[Transcrição do áudio enviado]: ${msg.audioTranscript}`);
     }
-    const contentText =
+    const timeTag = `[${formatBrtTime(msg.createdAt)}] `;
+    const baseContent =
       extras.length > 0 ? `${msg.body}\n${extras.join('\n')}` : msg.body;
+    const contentText = `${timeTag}${baseContent}`;
     const prev = turns[turns.length - 1];
     if (prev && prev.role === role) {
       prev.content = `${prev.content}\n${contentText}`;
@@ -787,7 +927,10 @@ export async function generateConversationReply(
     style.temperature
   );
   const shouldTransferToHuman = rawText.includes(TRANSFER_TOKEN);
-  const cleanText = rawText.replace(TRANSFER_TOKEN, '').trim();
+  let cleanText = rawText.replace(TRANSFER_TOKEN, '').trim();
+  if (alreadySentToday && cleanText) {
+    cleanText = stripRedundantGreeting(cleanText, conversation.contact.name);
+  }
 
   return {
     text:
@@ -1454,12 +1597,22 @@ export async function simulateTrainingChat(
     getUserSettings(userId),
     getTrainingExamplesForRule(userId, rule?.id),
   ]);
+  const alreadySentInSim = turns.some((t) => t.role === 'assistant');
   const style = resolveResponseStyle(rule, settings);
   const systemPrompt = buildSystemPrompt(
     rule,
     'Cliente (Simulação)',
     examples,
-    settings
+    settings,
+    {
+      alreadySentToday: alreadySentInSim,
+      recent20MinTranscript: turns
+        .slice(-10)
+        .map((t) => `  ${t.role === 'assistant' ? 'Você/IA' : 'Cliente'}: ${t.content}`)
+        .join('\n'),
+      recent20MinCount: Math.min(turns.length, 10),
+      currentTimeBrt: formatBrtTime(new Date()),
+    }
   );
 
   const rawText = await invokeProvider(
@@ -1470,7 +1623,10 @@ export async function simulateTrainingChat(
     style.temperature
   );
   const shouldTransferToHuman = rawText.includes(TRANSFER_TOKEN);
-  const cleanText = rawText.replace(TRANSFER_TOKEN, '').trim();
+  let cleanText = rawText.replace(TRANSFER_TOKEN, '').trim();
+  if (alreadySentInSim && cleanText) {
+    cleanText = stripRedundantGreeting(cleanText, 'Cliente');
+  }
 
   return {
     reply: cleanText || 'Transferindo para um atendente humano.',

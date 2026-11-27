@@ -1,6 +1,10 @@
 import {
   Activity,
+  AlertTriangle,
+  ArrowRight,
+  BellRing,
   Bot,
+  CheckCircle2,
   Clock,
   Cpu,
   MessageSquare,
@@ -14,7 +18,7 @@ import {
   Trash2,
   Wifi,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { MouseEvent, useEffect, useState } from 'react';
 import { StatusBadge } from '../components/StatusBadge';
 import { api } from '../lib/api';
 import { socket } from '../lib/socket';
@@ -30,6 +34,7 @@ interface Props {
   campaignRuntime: CampaignRuntimeState;
   onToggleGlobalPause: () => void;
   onGoToSettings: () => void;
+  onOpenConversation: (conversationId: string) => void;
 }
 
 const LOG_LEVEL_STYLE: Record<ActivityLogEntry['level'], string> = {
@@ -44,6 +49,7 @@ export function DashboardPage({
   campaignRuntime,
   onToggleGlobalPause,
   onGoToSettings,
+  onOpenConversation,
 }: Props) {
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [logs, setLogs] = useState<ActivityLogEntry[]>([]);
@@ -138,6 +144,25 @@ export function DashboardPage({
     }
   };
 
+  const handleResolveAttention = async (
+    e: MouseEvent,
+    conversationId: string
+  ) => {
+    e.stopPropagation();
+    try {
+      await api.post(`/conversations/${conversationId}/resolve-attention`);
+      await loadOverview();
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : 'Erro ao marcar alerta como atendido.'
+      );
+    }
+  };
+
+  const humanAlerts = overview?.humanAttentionAlerts || [];
+
   const countdownSec = campaignRuntime.nextSendAt
     ? Math.max(
         0,
@@ -164,6 +189,92 @@ export function DashboardPage({
           Atualizar
         </button>
       </div>
+
+      {/* Alerta Visual Amarelo: Conversas Redirecionadas para Atendimento Humano */}
+      {humanAlerts.length > 0 && (
+        <div className="rounded-2xl border-2 border-amber-400/70 bg-amber-500/15 p-5 shadow-lg shadow-amber-500/10">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-400/20 text-amber-300 ring-1 ring-amber-400/40">
+                <BellRing className="h-5 w-5 animate-pulse" />
+              </span>
+              <div>
+                <h3 className="flex items-center gap-2 text-sm font-extrabold text-amber-200 sm:text-base">
+                  Atenção de Atendente Humano Necessária
+                  <span className="rounded-full bg-amber-400 px-2 py-0.5 text-xs font-extrabold text-slate-950">
+                    {humanAlerts.length}
+                  </span>
+                </h3>
+                <p className="text-xs text-amber-100/80">
+                  Clique em qualquer alerta abaixo para abrir a conversa diretamente e assumir o atendimento.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-2.5 md:grid-cols-2">
+            {humanAlerts.map((alert) => (
+              <div
+                key={alert.conversationId}
+                role="button"
+                tabIndex={0}
+                onClick={() => onOpenConversation(alert.conversationId)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onOpenConversation(alert.conversationId);
+                  }
+                }}
+                className="group flex cursor-pointer items-start justify-between gap-3 rounded-xl border border-amber-400/40 bg-slate-950/75 p-3.5 text-left transition hover:border-amber-300 hover:bg-amber-500/10"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+                    <span className="truncate text-sm font-bold text-white">
+                      {alert.contactName}
+                    </span>
+                    <span className="text-[11px] text-amber-200/80">
+                      +{alert.contactPhone}
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      •{' '}
+                      {new Date(alert.since).toLocaleTimeString('pt-BR', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs font-medium text-amber-200">
+                    {alert.reason}
+                  </p>
+                  {alert.lastMessagePreview && (
+                    <p className="mt-1 truncate text-[11px] text-slate-300">
+                      Última msg: &quot;{alert.lastMessagePreview}&quot;
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex shrink-0 flex-col items-end gap-2">
+                  <span className="inline-flex items-center gap-1 rounded-lg bg-amber-400 px-2.5 py-1 text-[11px] font-bold text-slate-950 transition group-hover:bg-amber-300">
+                    Abrir Chat
+                    <ArrowRight className="h-3 w-3" />
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) =>
+                      handleResolveAttention(e, alert.conversationId)
+                    }
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium text-amber-200/80 hover:bg-slate-800 hover:text-white"
+                  >
+                    <CheckCircle2 className="h-3 w-3" />
+                    Marcar atendido
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* KPI Cards */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">

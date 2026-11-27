@@ -61,6 +61,33 @@ export interface ActivityLogEntry {
   createdAt: string;
 }
 
+export type AiReplyQueueStatus =
+  | 'RECEIVED_QUEUED'
+  | 'PROCESSING'
+  | 'RESPONDING'
+  | 'RESPONDED'
+  | 'FAILED';
+
+export interface AiReplyQueueItem {
+  conversationId: string;
+  contactName: string;
+  contactPhone: string;
+  lastIncomingPreview: string;
+  status: AiReplyQueueStatus;
+  detail?: string;
+  updatedAt: string;
+}
+
+export interface HumanAttentionAlert {
+  conversationId: string;
+  contactName: string;
+  contactPhone: string;
+  reason: string;
+  lastMessagePreview: string | null;
+  since: string;
+  unreadCount: number;
+}
+
 export interface DashboardOverview {
   metrics: {
     activeConversations: number;
@@ -71,6 +98,7 @@ export interface DashboardOverview {
   };
   aiHealth: AiHealth;
   campaignRuntime: CampaignRuntimeState;
+  humanAttentionAlerts: HumanAttentionAlert[];
   dailySummary: {
     text: string | null;
     updatedAt: string | null;
@@ -142,6 +170,9 @@ export interface Conversation {
   lastMessageAt: string;
   lastMessagePreview: string | null;
   unreadCount: number;
+  needsHumanAttention?: boolean;
+  humanAttentionReason?: string | null;
+  humanAttentionAt?: string | null;
   aiSummary: string | null;
   aiSummaryUpdatedAt: string | null;
 }

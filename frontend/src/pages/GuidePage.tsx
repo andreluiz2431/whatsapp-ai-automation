@@ -446,7 +446,13 @@ export function GuidePage({ onNavigate }: Props) {
                   • <strong>Importar conversa antiga:</strong> clique em <em>Importar</em> para subir um <code>.txt</code> do WhatsApp (Android/iOS) ou colar texto e detectar automaticamente quem é você.
                 </li>
                 <li>
-                  • <strong>Transferência inteligente:</strong> quando a <em>Condição de Parada</em> da regra é atingida, a IA avisa o cliente e muda o chat para Manual automaticamente.
+                  • <strong>Fila de Respostas em Tempo Real:</strong> acompanhe no topo da tela de <em>Conversas</em> o status ao vivo de cada atendimento (<em>Na fila → Processando IA → Respondendo → Respondido</em>).
+                </li>
+                <li>
+                  • <strong>Transferência inteligente &amp; Alerta Amarelo:</strong> quando a <em>Condição de Parada</em> da regra é atingida, a IA muda o chat para Manual e exibe um <strong>alerta amarelo clicável no Painel de Controle</strong> que leva direto para a conversa.
+                </li>
+                <li>
+                  • <strong>Continuidade dos últimos 20 min &amp; sem saudação repetida:</strong> a IA analisa o andamento completo dos últimos 20 minutos e evita repetir "Olá / Bom dia" quando já houve mensagem enviada no mesmo dia.
                 </li>
                 <li>
                   • <strong>Resumo IA &amp; Visão:</strong> gere resumos executivos com 1 clique e visualize cards de <em>Leitura da Imagem (IA)</em> nas fotos enviadas.

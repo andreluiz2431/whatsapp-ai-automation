@@ -115,9 +115,12 @@ model Conversation {
   activeRule         AiRule?   @relation("ConversationAssignedRule", fields: [activeRuleId], references: [id], onDelete: SetNull)
   lastMessageAt      DateTime  @default(now())
   lastMessagePreview String?
-  unreadCount        Int       @default(0)
-  aiSummary          String?
-  aiSummaryUpdatedAt DateTime?
+  unreadCount          Int       @default(0)
+  needsHumanAttention  Boolean   @default(false)
+  humanAttentionReason String?
+  humanAttentionAt     DateTime?
+  aiSummary            String?
+  aiSummaryUpdatedAt   DateTime?
   messages           Message[]
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
