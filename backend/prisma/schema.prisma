@@ -183,7 +183,9 @@ model AiTrainingExample {
   customerMessage String
   idealResponse   String
   feedbackNote    String?
-  source          String   @default("MANUAL") // MANUAL | SIMULATOR | CONVERSATION
+  category        String?
+  keywords        String?
+  source          String   @default("MANUAL") // MANUAL | SIMULATOR | CONVERSATION | IMPORT
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

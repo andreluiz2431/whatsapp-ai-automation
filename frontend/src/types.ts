@@ -197,6 +197,8 @@ export interface AiTrainingExample {
   customerMessage: string;
   idealResponse: string;
   feedbackNote: string | null;
+  category?: string | null;
+  keywords?: string | null;
   source: string;
   isActive: boolean;
   createdAt: string;

@@ -1772,3 +1772,149 @@ export async function extractTrainingFromConversation(
 
   return result;
 }
+
+/**
+ * Categoriza automaticamente os exemplos de treinamento do usuário usando IA
+ * em lotes, atribuindo um assunto/categoria padronizado e palavras-chave para busca rápida.
+ */
+export async function categorizeTrainingExamplesWithAi(
+  userId: string,
+  onlyUncategorized = true
+): Promise<{ categorizedCount: number; categories: string[] }> {
+  const allExamples = await prisma.aiTrainingExample.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'asc' },
+    select: {
+      id: true,
+      customerMessage: true,
+      idealResponse: true,
+      feedbackNote: true,
+      category: true,
+    },
+  });
+
+  if (allExamples.length === 0) {
+    throw new Error('Não há exemplos de treinamento cadastrados para categorizar.');
+  }
+
+  const existingCategories = Array.from(
+    new Set(
+      allExamples
+        .map((e) => (e.category || '').trim())
+        .filter(Boolean)
+    )
+  );
+
+  const targets = onlyUncategorized
+    ? allExamples.filter((e) => !e.category || !e.category.trim())
+    : allExamples;
+
+  if (targets.length === 0) {
+    return { categorizedCount: 0, categories: existingCategories };
+  }
+
+  const systemPrompt = [
+    'Você é um especialista em organização de bases de conhecimento e atendimento ao cliente no WhatsApp.',
+    'Sua tarefa é caracterizar/categorizar cada exemplo de treinamento atribuindo:',
+    '1) "category": um nome curto e claro de assunto em português (2 a 3 palavras no máximo, ex: "Preços e Pagamento", "Suporte Técnico", "Prazos e Entrega", "Horário e Contato", "Agendamento", "Cancelamento", "Produtos e Planos", "Triagem Inicial").',
+    '2) "keywords": 2 a 4 palavras-chave curtas em minúsculas separadas por vírgula para facilitar busca.',
+    'REGRAS IMPORTANTES:',
+    '- Reutilize o MESMO nome exato de categoria para exemplos que tratam do mesmo assunto (evite criar sinônimos duplicados).',
+    existingCategories.length > 0
+      ? `- Categorias já existentes na conta (reaproveite quando fizer sentido): ${existingCategories.join(', ')}.`
+      : '',
+    '- Responda ESTRITAMENTE em JSON válido (sem markdown ```json, sem texto fora do JSON) no formato:',
+    '{ "items": [ { "id": "...", "category": "...", "keywords": "palavra1, palavra2" } ] }',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  let categorizedCount = 0;
+  const collectedCategories = new Set<string>(
+    onlyUncategorized ? existingCategories : []
+  );
+
+  // Processa em lotes de até 30 exemplos por chamada para economizar tokens e evitar truncamento
+  const batchSize = 30;
+  for (let i = 0; i < targets.length; i += batchSize) {
+    const batch = targets.slice(i, i + batchSize);
+    const payload = batch.map((ex) => ({
+      id: ex.id,
+      cliente: ex.customerMessage.slice(0, 260),
+      resposta: ex.idealResponse.slice(0, 300),
+      obs: (ex.feedbackNote || '').slice(0, 140),
+    }));
+
+    const raw = await invokeProvider(
+      userId,
+      systemPrompt,
+      [
+        {
+          role: 'user',
+          content: `Categorize os ${batch.length} exemplos abaixo:\n${JSON.stringify(
+            payload
+          )}`,
+        },
+      ],
+      'training',
+      0.2
+    );
+
+    const cleaned = raw
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/```\s*$/i, '')
+      .trim();
+    const jsonStart = cleaned.indexOf('{');
+    const jsonEnd = cleaned.lastIndexOf('}');
+    const jsonSlice =
+      jsonStart !== -1 && jsonEnd !== -1
+        ? cleaned.slice(jsonStart, jsonEnd + 1)
+        : cleaned;
+
+    let parsedItems: Array<{ id?: string; category?: string; keywords?: string }> =
+      [];
+    try {
+      const parsed = JSON.parse(jsonSlice) as {
+        items?: Array<{ id?: string; category?: string; keywords?: string }>;
+      };
+      parsedItems = Array.isArray(parsed.items) ? parsed.items : [];
+    } catch {
+      throw new Error(
+        'A IA retornou um formato inesperado ao categorizar os exemplos. Tente novamente.'
+      );
+    }
+
+    const validIds = new Set(batch.map((b) => b.id));
+    for (const item of parsedItems) {
+      if (!item?.id || !validIds.has(item.id)) continue;
+      const category = String(item.category || '').trim().slice(0, 50);
+      const keywords = String(item.keywords || '').trim().slice(0, 160);
+      if (!category) continue;
+
+      await prisma.aiTrainingExample.update({
+        where: { id: item.id },
+        data: {
+          category,
+          keywords: keywords || null,
+        },
+      });
+      collectedCategories.add(category);
+      categorizedCount++;
+    }
+  }
+
+  await logActivity(
+    userId,
+    'AI',
+    `Categorização automática concluída: ${categorizedCount} exemplo(s) classificado(s) em ${collectedCategories.size} assunto(s).`,
+    'SUCCESS'
+  );
+
+  return {
+    categorizedCount,
+    categories: Array.from(collectedCategories).sort((a, b) =>
+      a.localeCompare(b, 'pt-BR')
+    ),
+  };
+}

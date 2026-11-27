@@ -9,11 +9,14 @@ import {
   FileSpreadsheet,
   GraduationCap,
   History,
+  Loader2,
   MessageSquare,
   Plus,
   RotateCcw,
+  Search,
   Send,
   Sparkles,
+  Tag as TagIcon,
   ThumbsUp,
   Trash2,
   Upload,
@@ -95,7 +98,19 @@ export function TrainingPage() {
   const [newCustomerMsg, setNewCustomerMsg] = useState('');
   const [newIdealResp, setNewIdealResp] = useState('');
   const [newNote, setNewNote] = useState('');
+  const [newCategory, setNewCategory] = useState('');
   const [newRuleId, setNewRuleId] = useState('');
+
+  // Caracterizador / Categorizador com IA + Filtros por assunto
+  const [categorizing, setCategorizing] = useState(false);
+  const [categorizeBanner, setCategorizeBanner] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+  const [exampleSearch, setExampleSearch] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
+  const [editingCatId, setEditingCatId] = useState<string | null>(null);
+  const [editingCatValue, setEditingCatValue] = useState('');
 
   const [batchFile, setBatchFile] = useState<File | null>(null);
   const [batchText, setBatchText] = useState('');
@@ -378,15 +393,61 @@ export function TrainingPage() {
         customerMessage: newCustomerMsg,
         idealResponse: newIdealResp,
         feedbackNote: newNote,
+        category: newCategory.trim() || null,
         source: 'MANUAL',
       });
       setNewCustomerMsg('');
       setNewIdealResp('');
       setNewNote('');
+      setNewCategory('');
       setShowAddForm(false);
       await loadOverview();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Erro ao salvar exemplo.');
+    }
+  };
+
+  const handleCategorizeWithAi = async (onlyUncategorized: boolean) => {
+    if (categorizing || examples.length === 0) return;
+    setCategorizing(true);
+    setCategorizeBanner(null);
+    try {
+      const res = await api.post<{
+        ok: boolean;
+        categorizedCount: number;
+        categories: string[];
+      }>('/training/examples/categorize', { onlyUncategorized });
+      await loadOverview();
+      setCategorizeBanner({
+        ok: true,
+        message:
+          res.categorizedCount > 0
+            ? `${res.categorizedCount} exemplo(s) caracterizado(s) com IA em ${res.categories.length} assunto(s): ${res.categories.join(', ')}.`
+            : 'Todos os exemplos já estão categorizados! Clique em "Re-categorizar todos" se quiser reclassificar tudo.',
+      });
+    } catch (err) {
+      setCategorizeBanner({
+        ok: false,
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Erro ao categorizar exemplos com IA.',
+      });
+    } finally {
+      setCategorizing(false);
+    }
+  };
+
+  const handleSaveManualCategory = async (exampleId: string) => {
+    try {
+      await api.put(`/training/examples/${exampleId}`, {
+        category: editingCatValue.trim() || null,
+      });
+      setEditingCatId(null);
+      setEditingCatValue('');
+      await loadOverview();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Erro ao atualizar assunto.');
     }
   };
 
@@ -598,6 +659,44 @@ export function TrainingPage() {
   );
 
   const activeCount = examples.filter((e) => e.isActive).length;
+  const uncategorizedCount = examples.filter(
+    (e) => !e.category || !e.category.trim()
+  ).length;
+
+  const categoryCounts = examples.reduce<Record<string, number>>((acc, ex) => {
+    const cat = (ex.category || '').trim();
+    if (cat) {
+      acc[cat] = (acc[cat] || 0) + 1;
+    }
+    return acc;
+  }, {});
+
+  const sortedCategories = Object.entries(categoryCounts).sort((a, b) =>
+    a[0].localeCompare(b[0], 'pt-BR')
+  );
+
+  const filteredExamples = examples.filter((ex) => {
+    const cat = (ex.category || '').trim();
+    if (selectedCategory === '__UNCATEGORIZED__' && cat) return false;
+    if (
+      selectedCategory !== 'ALL' &&
+      selectedCategory !== '__UNCATEGORIZED__' &&
+      cat !== selectedCategory
+    ) {
+      return false;
+    }
+
+    const q = exampleSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      ex.customerMessage.toLowerCase().includes(q) ||
+      ex.idealResponse.toLowerCase().includes(q) ||
+      (ex.feedbackNote || '').toLowerCase().includes(q) ||
+      cat.toLowerCase().includes(q) ||
+      (ex.keywords || '').toLowerCase().includes(q) ||
+      (ex.rule?.name || 'global').toLowerCase().includes(q)
+    );
+  });
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
@@ -1006,6 +1105,30 @@ export function TrainingPage() {
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
+                disabled={categorizing || examples.length === 0}
+                onClick={() =>
+                  void handleCategorizeWithAi(uncategorizedCount > 0)
+                }
+                title={
+                  uncategorizedCount > 0
+                    ? `Usar IA para caracterizar os ${uncategorizedCount} exemplo(s) sem assunto`
+                    : 'Re-categorizar todos os exemplos com IA'
+                }
+                className="inline-flex items-center gap-1.5 rounded-xl border border-violet-500/40 bg-violet-500/15 px-3 py-2 text-xs font-semibold text-violet-200 transition hover:bg-violet-500/25 disabled:opacity-40"
+              >
+                {categorizing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5 text-violet-300" />
+                )}
+                {categorizing
+                  ? 'Categorizando...'
+                  : uncategorizedCount > 0
+                    ? `Caracterizar com IA (${uncategorizedCount})`
+                    : 'Re-caracterizar todos (IA)'}
+              </button>
+              <button
+                type="button"
                 disabled={examples.length === 0}
                 onClick={() =>
                   void downloadFromApi(
@@ -1135,7 +1258,13 @@ export function TrainingPage() {
                       />
                     </div>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <input
+                      value={newCategory}
+                      onChange={(e) => setNewCategory(e.target.value)}
+                      placeholder="Assunto / Categoria (opcional, ou use a IA depois)"
+                      className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+                    />
                     <input
                       value={newNote}
                       onChange={(e) => setNewNote(e.target.value)}
@@ -1394,13 +1523,116 @@ export function TrainingPage() {
             </div>
           )}
 
+          {categorizeBanner && (
+            <div
+              className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-xs ${
+                categorizeBanner.ok
+                  ? 'border-violet-500/35 bg-violet-500/10 text-violet-200'
+                  : 'border-rose-500/35 bg-rose-500/10 text-rose-200'
+              }`}
+            >
+              <span>
+                {categorizeBanner.ok ? '✓ ' : '✗ '}
+                {categorizeBanner.message}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCategorizeBanner(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Barra de Busca + Filtro por Assunto / Categoria */}
+          {examples.length > 0 && (
+            <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+              <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="relative flex-1">
+                  <Search className="pointer-events-none absolute top-2.5 left-3 h-4 w-4 text-slate-500" />
+                  <input
+                    value={exampleSearch}
+                    onChange={(e) => setExampleSearch(e.target.value)}
+                    placeholder="Buscar por assunto, palavra-chave, pergunta do cliente ou resposta..."
+                    className="w-full rounded-xl border border-slate-800 bg-slate-950 py-2 pr-3 pl-9 text-xs text-slate-200 placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+                  />
+                </div>
+                {sortedCategories.length > 0 && uncategorizedCount === 0 && (
+                  <span className="shrink-0 text-[11px] text-slate-400">
+                    {filteredExamples.length} de {examples.length} exemplo(s)
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="mr-1 inline-flex items-center gap-1 text-[11px] font-semibold text-slate-400">
+                  <TagIcon className="h-3 w-3 text-violet-400" />
+                  Assuntos:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedCategory('ALL')}
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
+                    selectedCategory === 'ALL'
+                      ? 'bg-emerald-500 text-slate-950'
+                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  }`}
+                >
+                  Todos ({examples.length})
+                </button>
+                {sortedCategories.map(([cat, count]) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setSelectedCategory(cat)}
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
+                      selectedCategory === cat
+                        ? 'bg-violet-500 text-white'
+                        : 'border border-violet-500/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20'
+                    }`}
+                  >
+                    {cat} ({count})
+                  </button>
+                ))}
+                {uncategorizedCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategory('__UNCATEGORIZED__')}
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
+                      selectedCategory === '__UNCATEGORIZED__'
+                        ? 'bg-amber-400 text-slate-950'
+                        : 'bg-slate-800 text-amber-300/90 hover:bg-slate-700'
+                    }`}
+                  >
+                    Sem assunto ({uncategorizedCount})
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {examples.length === 0 ? (
             <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-10 text-center text-sm text-slate-500">
-              Nenhum exemplo de treinamento salvo ainda. Use o Simulador ao Vivo ou analise uma conversa real!
+              Nenhum exemplo de treinamento salvo ainda. Use o Simulador ao Vivo, importe um modelo ou analise uma conversa real!
+            </div>
+          ) : filteredExamples.length === 0 ? (
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-8 text-center text-xs text-slate-400">
+              Nenhum exemplo encontrado para esse filtro ou busca.{' '}
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedCategory('ALL');
+                  setExampleSearch('');
+                }}
+                className="font-semibold text-emerald-400 hover:underline"
+              >
+                Limpar filtros
+              </button>
             </div>
           ) : (
             <div className="grid gap-3 lg:grid-cols-2">
-              {examples.map((ex) => (
+              {filteredExamples.map((ex) => (
                 <div
                   key={ex.id}
                   className={`rounded-2xl border p-4 transition ${
@@ -1414,6 +1646,74 @@ export function TrainingPage() {
                       <span className="rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-300">
                         {ex.rule ? ex.rule.name : 'Global'}
                       </span>
+
+                      {editingCatId === ex.id ? (
+                        <span className="inline-flex items-center gap-1">
+                          <input
+                            value={editingCatValue}
+                            onChange={(e) => setEditingCatValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                void handleSaveManualCategory(ex.id);
+                              } else if (e.key === 'Escape') {
+                                setEditingCatId(null);
+                              }
+                            }}
+                            placeholder="Assunto..."
+                            className="w-36 rounded-md border border-violet-500/50 bg-slate-950 px-2 py-0.5 text-[10px] text-white focus:outline-none"
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void handleSaveManualCategory(ex.id)}
+                            className="rounded bg-violet-500 px-1.5 py-0.5 text-[10px] font-bold text-white"
+                          >
+                            OK
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingCatId(null)}
+                            className="text-slate-400 hover:text-white"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ) : ex.category ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-violet-500/35 bg-violet-500/15 px-2.5 py-0.5 text-[10px] font-semibold text-violet-200">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedCategory(ex.category!)}
+                            title="Filtrar por este assunto"
+                            className="hover:underline"
+                          >
+                            {ex.category}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingCatId(ex.id);
+                              setEditingCatValue(ex.category || '');
+                            }}
+                            title="Editar assunto"
+                            className="text-violet-300/70 hover:text-white"
+                          >
+                            <Edit3 className="h-2.5 w-2.5" />
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingCatId(ex.id);
+                            setEditingCatValue('');
+                          }}
+                          className="rounded-full border border-dashed border-slate-700 px-2 py-0.5 text-[10px] text-slate-400 hover:border-violet-500/50 hover:text-violet-300"
+                        >
+                          + Assunto
+                        </button>
+                      )}
+
                       <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-400">
                         {ex.source}
                       </span>
@@ -1454,6 +1754,25 @@ export function TrainingPage() {
                       <p className="text-[11px] text-slate-400">
                         Obs: {ex.feedbackNote}
                       </p>
+                    )}
+                    {ex.keywords && (
+                      <div className="flex flex-wrap gap-1 pt-0.5">
+                        {ex.keywords
+                          .split(',')
+                          .map((k) => k.trim())
+                          .filter(Boolean)
+                          .slice(0, 5)
+                          .map((kw) => (
+                            <button
+                              key={kw}
+                              type="button"
+                              onClick={() => setExampleSearch(kw)}
+                              className="rounded bg-slate-800/80 px-1.5 py-0.5 text-[10px] text-slate-400 hover:bg-violet-500/20 hover:text-violet-200"
+                            >
+                              #{kw}
+                            </button>
+                          ))}
+                      </div>
                     )}
                   </div>
                 </div>

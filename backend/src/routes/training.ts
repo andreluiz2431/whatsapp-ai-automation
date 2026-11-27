@@ -3,6 +3,7 @@ import multer from 'multer';
 import { prisma } from '../db';
 import { logActivity } from '../services/activityLog';
 import {
+  categorizeTrainingExamplesWithAi,
   ChatTurn,
   extractTrainingFromConversation,
   extractTrainingFromTranscript,
@@ -20,6 +21,8 @@ interface ParsedTrainingImportItem {
   customerMessage: string;
   idealResponse: string;
   feedbackNote: string | null;
+  category: string | null;
+  keywords: string | null;
   ruleName: string | null;
   isActive: boolean;
 }
@@ -28,6 +31,8 @@ const TEMPLATE_EXAMPLES: Array<{
   customerMessage: string;
   idealResponse: string;
   feedbackNote: string;
+  category: string;
+  keywords: string;
   ruleName: string;
   isActive: boolean;
 }> = [
@@ -36,6 +41,8 @@ const TEMPLATE_EXAMPLES: Array<{
     idealResponse:
       'Temos opções a partir de R$ 97/mês. Aceitamos Pix com 5% de desconto ou cartão de crédito em até 6x sem juros. Qual plano faz mais sentido para você?',
     feedbackNote: 'Sempre mencionar Pix e parcelamento de forma objetiva.',
+    category: 'Preços e Pagamento',
+    keywords: 'valor, pix, cartão, parcelamento',
     ruleName: 'Global',
     isActive: true,
   },
@@ -44,6 +51,8 @@ const TEMPLATE_EXAMPLES: Array<{
     idealResponse:
       'Nosso atendimento humano funciona de segunda a sexta, das 9h às 18h, mas posso adiantar suas dúvidas por aqui agora mesmo!',
     feedbackNote: 'Informar horário comercial sem encerrar o assunto.',
+    category: 'Horário e Atendimento',
+    keywords: 'horário, funcionamento, atendimento',
     ruleName: 'Global',
     isActive: true,
   },
@@ -52,6 +61,8 @@ const TEMPLATE_EXAMPLES: Array<{
     idealResponse:
       'Claro! Vou encaminhar sua conversa agora mesmo para um de nossos especialistas humanos te ajudar. [TRANSFERIR_HUMANO]',
     feedbackNote: 'Acionar transferência para humano imediatamente.',
+    category: 'Cancelamento e Suporte',
+    keywords: 'cancelar, humano, atendente',
     ruleName: 'Global',
     isActive: true,
   },
@@ -70,16 +81,21 @@ function buildExamplesCsv(
     customerMessage: string;
     idealResponse: string;
     feedbackNote?: string | null;
+    category?: string | null;
+    keywords?: string | null;
     ruleName?: string | null;
     isActive?: boolean;
   }>
 ): string {
-  const header = 'mensagem_cliente;resposta_ideal;observacao;regra;ativo';
+  const header =
+    'mensagem_cliente;resposta_ideal;observacao;categoria;palavras_chave;regra;ativo';
   const lines = rows.map((r) =>
     [
       escapeCsvCell(r.customerMessage),
       escapeCsvCell(r.idealResponse),
       escapeCsvCell(r.feedbackNote || ''),
+      escapeCsvCell(r.category || ''),
+      escapeCsvCell(r.keywords || ''),
       escapeCsvCell(r.ruleName || 'Global'),
       r.isActive === false ? 'false' : 'true',
     ].join(';')
@@ -238,6 +254,10 @@ function parseTrainingExamplesPayload(
 
       const rawNote =
         rec.feedbackNote ?? rec.observacao ?? rec.nota ?? rec.obs ?? '';
+      const rawCategory =
+        rec.category ?? rec.categoria ?? rec.assunto ?? rec.tema ?? '';
+      const rawKeywords =
+        rec.keywords ?? rec.palavras_chave ?? rec.palavrasChave ?? rec.tags ?? '';
       const rawRule =
         rec.ruleName ?? rec.regra ?? rec.fluxo ?? rec.rule ?? '';
       const rawActive = rec.isActive ?? rec.ativo ?? true;
@@ -246,6 +266,8 @@ function parseTrainingExamplesPayload(
         customerMessage,
         idealResponse,
         feedbackNote: String(rawNote || '').trim() || null,
+        category: String(rawCategory || '').trim().slice(0, 50) || null,
+        keywords: String(rawKeywords || '').trim().slice(0, 160) || null,
         ruleName: String(rawRule || '').trim() || null,
         isActive: parseBoolValue(rawActive),
       });
@@ -274,6 +296,12 @@ function parseTrainingExamplesPayload(
   const idxNote = headers.findIndex((h) =>
     ['observacao', 'feedbacknote', 'nota', 'obs', 'regraextra'].includes(h)
   );
+  const idxCategory = headers.findIndex((h) =>
+    ['categoria', 'category', 'assunto', 'tema'].includes(h)
+  );
+  const idxKeywords = headers.findIndex((h) =>
+    ['palavraschave', 'keywords', 'tags'].includes(h)
+  );
   const idxRule = headers.findIndex((h) =>
     ['regra', 'rulename', 'fluxo', 'persona', 'escopo'].includes(h)
   );
@@ -286,6 +314,8 @@ function parseTrainingExamplesPayload(
   const colCustomer = hasHeaderRow ? idxCustomer : 0;
   const colIdeal = hasHeaderRow ? idxIdeal : 1;
   const colNote = hasHeaderRow ? idxNote : 2;
+  const colCategory = hasHeaderRow ? idxCategory : -1;
+  const colKeywords = hasHeaderRow ? idxKeywords : -1;
   const colRule = hasHeaderRow ? idxRule : 3;
   const colActive = hasHeaderRow ? idxActive : 4;
 
@@ -302,6 +332,14 @@ function parseTrainingExamplesPayload(
 
     const feedbackNote =
       colNote >= 0 ? String(row[colNote] ?? '').trim() || null : null;
+    const category =
+      colCategory >= 0
+        ? String(row[colCategory] ?? '').trim().slice(0, 50) || null
+        : null;
+    const keywords =
+      colKeywords >= 0
+        ? String(row[colKeywords] ?? '').trim().slice(0, 160) || null
+        : null;
     const ruleName =
       colRule >= 0 ? String(row[colRule] ?? '').trim() || null : null;
     const isActive =
@@ -313,6 +351,8 @@ function parseTrainingExamplesPayload(
       customerMessage,
       idealResponse,
       feedbackNote,
+      category,
+      keywords,
       ruleName,
       isActive,
     });
@@ -407,6 +447,8 @@ trainingRouter.get('/examples/export', async (req, res) => {
       customerMessage: ex.customerMessage,
       idealResponse: ex.idealResponse,
       feedbackNote: ex.feedbackNote || '',
+      category: ex.category || '',
+      keywords: ex.keywords || '',
       ruleName: ex.rule?.name || 'Global',
       isActive: ex.isActive,
       source: ex.source,
@@ -516,6 +558,8 @@ trainingRouter.post(
           customerMessage: item.customerMessage,
           idealResponse: item.idealResponse,
           feedbackNote: item.feedbackNote,
+          category: item.category,
+          keywords: item.keywords,
           source: 'IMPORT',
           isActive: item.isActive,
         };
@@ -563,6 +607,25 @@ trainingRouter.post(
   }
 );
 
+trainingRouter.post('/examples/categorize', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const onlyUncategorized = req.body?.onlyUncategorized !== false;
+    const result = await categorizeTrainingExamplesWithAi(
+      userId,
+      onlyUncategorized
+    );
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Erro ao categorizar exemplos com IA.',
+    });
+  }
+});
+
 trainingRouter.post('/examples', async (req, res) => {
   try {
     const userId = req.user!.id;
@@ -571,12 +634,16 @@ trainingRouter.post('/examples', async (req, res) => {
       customerMessage,
       idealResponse,
       feedbackNote = null,
+      category = null,
+      keywords = null,
       source = 'MANUAL',
     } = req.body as {
       ruleId?: string | null;
       customerMessage?: string;
       idealResponse?: string;
       feedbackNote?: string | null;
+      category?: string | null;
+      keywords?: string | null;
       source?: string;
     };
 
@@ -604,6 +671,8 @@ trainingRouter.post('/examples', async (req, res) => {
         customerMessage: customerMessage.trim(),
         idealResponse: idealResponse.trim(),
         feedbackNote: feedbackNote?.trim() || null,
+        category: category?.trim().slice(0, 50) || null,
+        keywords: keywords?.trim().slice(0, 160) || null,
         source: String(source || 'MANUAL'),
         isActive: true,
       },
@@ -639,8 +708,15 @@ trainingRouter.put('/examples/:id', async (req, res) => {
       return;
     }
 
-    const { ruleId, customerMessage, idealResponse, feedbackNote, isActive } =
-      req.body;
+    const {
+      ruleId,
+      customerMessage,
+      idealResponse,
+      feedbackNote,
+      category,
+      keywords,
+      isActive,
+    } = req.body;
 
     const updated = await prisma.aiTrainingExample.update({
       where: { id: existing.id },
@@ -654,6 +730,12 @@ trainingRouter.put('/examples/:id', async (req, res) => {
           : {}),
         ...(feedbackNote !== undefined
           ? { feedbackNote: String(feedbackNote || '').trim() || null }
+          : {}),
+        ...(category !== undefined
+          ? { category: String(category || '').trim().slice(0, 50) || null }
+          : {}),
+        ...(keywords !== undefined
+          ? { keywords: String(keywords || '').trim().slice(0, 160) || null }
           : {}),
         ...(isActive !== undefined ? { isActive: Boolean(isActive) } : {}),
       },

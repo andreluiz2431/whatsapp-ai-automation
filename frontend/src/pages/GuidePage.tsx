@@ -486,6 +486,9 @@ export function GuidePage({ onNavigate, onOpenOnboarding }: Props) {
                   • <strong>Incorporar na Base:</strong> adicione conhecimento descoberto direto na Base de Conhecimento da regra com 1 clique.
                 </li>
                 <li>
+                  • <strong>Caracterizador / Categorizador com IA:</strong> clique em <em>Caracterizar com IA</em> na aba de exemplos para classificar automaticamente todos os roteiros por assunto e palavras-chave (<code>#tags</code>), facilitando filtrar qualquer tema específico em 1 clique.
+                </li>
+                <li>
                   • <strong>Importar &amp; Exportar Roteiros em Lote:</strong> baixe o modelo pronto (<code>.csv</code> para Excel ou <code>.json</code>), exporte seus roteiros existentes e importe vários de uma vez escolhendo entre <strong>Manter existentes</strong> ou <strong>Sobrescrever todos</strong>.
                 </li>
                 <li>
