@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { OnboardingWizard } from './components/OnboardingWizard';
 import { NavTab, Sidebar } from './components/Sidebar';
 import { api } from './lib/api';
 import { socket } from './lib/socket';
@@ -11,6 +12,7 @@ import { RulesPage } from './pages/RulesPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { TrainingPage } from './pages/TrainingPage';
 import {
+  AiHealth,
   AiUsageSummary,
   AuthUser,
   CampaignRuntimeState,
@@ -45,6 +47,8 @@ export default function App() {
   const [campaignRuntime, setCampaignRuntime] =
     useState<CampaignRuntimeState>(INITIAL_RUNTIME);
   const [aiUsage, setAiUsage] = useState<AiUsageSummary | null>(null);
+  const [aiReady, setAiReady] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [unreadTotal, setUnreadTotal] = useState(0);
   const [focusConversationId, setFocusConversationId] = useState<string | null>(
     null
@@ -73,16 +77,33 @@ export default function App() {
       setWaState(INITIAL_WA_STATE);
       setCampaignRuntime(INITIAL_RUNTIME);
       setAiUsage(null);
+      setAiReady(false);
+      setShowOnboarding(false);
       setUnreadTotal(0);
       return;
     }
 
     socket.connect();
 
-    api
-      .get<WhatsAppState>('/whatsapp/status')
-      .then(setWaState)
-      .catch(() => {});
+    Promise.all([
+      api.get<WhatsAppState>('/whatsapp/status').catch(() => INITIAL_WA_STATE),
+      api
+        .get<{ aiHealth: AiHealth }>('/settings')
+        .then((r) => Boolean(r.aiHealth?.ready))
+        .catch(() => false),
+    ]).then(([statusData, isAiReady]) => {
+      setWaState(statusData);
+      setAiReady(isAiReady);
+
+      const doneKey = `zapflow_onboarding_done_${user.id}`;
+      const alreadyDismissed = localStorage.getItem(doneKey) === '1';
+      const waNotReady =
+        statusData.status === 'DISCONNECTED' && !statusData.hasSavedSession;
+      if (!alreadyDismissed && (!isAiReady || waNotReady)) {
+        setShowOnboarding(true);
+      }
+    });
+
     api
       .get<AiUsageSummary>('/dashboard/ai-usage')
       .then(setAiUsage)
@@ -167,6 +188,7 @@ export default function App() {
             campaignRuntime={campaignRuntime}
             onToggleGlobalPause={handleToggleGlobalPause}
             onGoToSettings={() => setActiveTab('settings')}
+            onOpenOnboarding={() => setShowOnboarding(true)}
             onOpenConversation={(convId) => {
               setFocusConversationId(convId);
               setActiveTab('conversations');
@@ -190,8 +212,29 @@ export default function App() {
           />
         )}
         {activeTab === 'settings' && <SettingsPage />}
-        {activeTab === 'guide' && <GuidePage onNavigate={setActiveTab} />}
+        {activeTab === 'guide' && (
+          <GuidePage
+            onNavigate={setActiveTab}
+            onOpenOnboarding={() => setShowOnboarding(true)}
+          />
+        )}
       </main>
+
+      {showOnboarding && (
+        <OnboardingWizard
+          userName={user.name}
+          waState={waState}
+          aiReady={aiReady}
+          onAiConfigured={() => setAiReady(true)}
+          onFinish={(targetTab) => {
+            localStorage.setItem(`zapflow_onboarding_done_${user.id}`, '1');
+            setShowOnboarding(false);
+            if (targetTab) {
+              setActiveTab(targetTab);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

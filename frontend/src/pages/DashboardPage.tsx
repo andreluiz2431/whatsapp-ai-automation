@@ -13,6 +13,7 @@ import {
   Power,
   QrCode,
   RefreshCw,
+  Rocket,
   Send,
   Sparkles,
   Trash2,
@@ -34,6 +35,7 @@ interface Props {
   campaignRuntime: CampaignRuntimeState;
   onToggleGlobalPause: () => void;
   onGoToSettings: () => void;
+  onOpenOnboarding: () => void;
   onOpenConversation: (conversationId: string) => void;
 }
 
@@ -49,6 +51,7 @@ export function DashboardPage({
   campaignRuntime,
   onToggleGlobalPause,
   onGoToSettings,
+  onOpenOnboarding,
   onOpenConversation,
 }: Props) {
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
@@ -181,13 +184,26 @@ export function DashboardPage({
             Monitore a conexão do WhatsApp, métricas em tempo real e o motor de IA gratuito.
           </p>
         </div>
-        <button
-          onClick={() => void loadOverview()}
-          className="inline-flex items-center gap-2 self-start rounded-xl border border-slate-800 bg-slate-900 px-3.5 py-2 text-xs font-medium text-slate-300 transition hover:bg-slate-800"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          Atualizar
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start">
+          <button
+            onClick={onOpenOnboarding}
+            className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold transition ${
+              !overview?.aiHealth.ready || waState.status === 'DISCONNECTED'
+                ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30'
+                : 'border border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800'
+            }`}
+          >
+            <Rocket className="h-3.5 w-3.5" />
+            Guia Teleguiado
+          </button>
+          <button
+            onClick={() => void loadOverview()}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900 px-3.5 py-2 text-xs font-medium text-slate-300 transition hover:bg-slate-800"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Atualizar
+          </button>
+        </div>
       </div>
 
       {/* Alerta Visual Amarelo: Conversas Redirecionadas para Atendimento Humano */}

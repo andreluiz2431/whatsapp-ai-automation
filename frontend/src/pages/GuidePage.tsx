@@ -26,6 +26,7 @@ import { NavTab } from '../components/Sidebar';
 
 interface Props {
   onNavigate: (tab: NavTab) => void;
+  onOpenOnboarding?: () => void;
 }
 
 type GuideSection = 'quickstart' | 'features' | 'examples' | 'faq' | 'about';
@@ -177,7 +178,7 @@ const FAQ_ITEMS = [
   },
 ];
 
-export function GuidePage({ onNavigate }: Props) {
+export function GuidePage({ onNavigate, onOpenOnboarding }: Props) {
   const [section, setSection] = useState<GuideSection>('quickstart');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [openFaq, setOpenFaq] = useState<number | null>(0);
@@ -210,11 +211,20 @@ export function GuidePage({ onNavigate }: Props) {
             </p>
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">
+            {onOpenOnboarding && (
+              <button
+                onClick={onOpenOnboarding}
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400"
+              >
+                <Rocket className="h-4 w-4" />
+                Abrir Guia Teleguiado
+              </button>
+            )}
             <button
               onClick={() => onNavigate('settings')}
-              className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400"
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/80 px-4 py-2.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-700"
             >
-              <Cpu className="h-4 w-4" />
+              <Cpu className="h-4 w-4 text-emerald-400" />
               Configurar IA
             </button>
             <button

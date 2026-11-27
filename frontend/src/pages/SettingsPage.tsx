@@ -1,6 +1,7 @@
 import {
   CheckCircle2,
   Cpu,
+  ExternalLink,
   Eye,
   FlaskConical,
   Image as ImageIcon,
@@ -265,9 +266,20 @@ export function SettingsPage() {
           {settings.aiProvider === 'gemini' ? (
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-400">
-                  Gemini API Key (Google AI Studio)
-                </label>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <label className="text-xs font-medium text-slate-400">
+                    Gemini API Key (Google AI Studio)
+                  </label>
+                  <a
+                    href="https://aistudio.google.com/apikey"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300"
+                  >
+                    Obter chave grátis
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                </div>
                 <input
                   type="password"
                   value={settings.geminiApiKey}

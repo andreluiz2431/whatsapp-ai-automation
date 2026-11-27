@@ -25,6 +25,7 @@ Aplicação web full-stack **multi-usuário**, **100% gratuita e open-source**, 
 - Sessões assinadas em cookie `HttpOnly` (`SameSite=Lax`, `Secure` em produção).
 - Middleware `requireAuth` em todas as rotas `/api/*` e autenticação no handshake do **Socket.io** com salas privadas por usuário (`user:<userId>`).
 - **Isolamento total por conta:** cada usuário possui sua própria sessão do WhatsApp (`auth_session/<userId>`), sua própria chave de IA (`UserSettings`), contatos, tags, conversas, regras/personas, exemplos de treinamento, campanhas, métricas de consumo e logs.
+- **Guia Teleguiado de Primeiro Acesso (`OnboardingWizard` + tela de Login):** na tela de login já exibe um guia rápido com link direto para gerar a API Key gratuita no Google AI Studio e instruções de conexão do WhatsApp (Android/iPhone); ao entrar pela primeira vez sem IA ou WhatsApp configurados, abre automaticamente um assistente interativo em 3 etapas onde o usuário cola/testa sua chave Gemini e escaneia o QR Code ao vivo (reabrível a qualquer momento pelo botão *Guia Teleguiado*).
 - **Migração automática de legado:** caso exista um backup single-tenant (`dev.db.legacy.bak`) e sessão antiga na raiz de `auth_session/`, o serviço `legacyMigration.ts` importa tudo automaticamente para a conta definida em `OWNER_EMAIL`.
 
 ### 2. Conexão WhatsApp & Painel de Controle (Dashboard)
