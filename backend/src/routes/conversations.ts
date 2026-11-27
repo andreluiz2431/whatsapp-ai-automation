@@ -317,6 +317,23 @@ conversationsRouter.get('/:id/messages', async (req, res) => {
   }
 });
 
+conversationsRouter.post('/:id/ai-reply', async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const result = await whatsappManager
+      .getSession(userId)
+      .triggerAiReplyNow(req.params.id);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Erro ao gerar e enviar resposta da IA.',
+    });
+  }
+});
+
 conversationsRouter.post('/:id/send', async (req, res) => {
   try {
     const userId = req.user!.id;

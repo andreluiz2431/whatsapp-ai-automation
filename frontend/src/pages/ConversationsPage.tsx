@@ -34,6 +34,7 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
   const [search, setSearch] = useState('');
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [aiReplying, setAiReplying] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [showTagsPanel, setShowTagsPanel] = useState(false);
@@ -177,6 +178,23 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
       );
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Erro ao vincular fluxo.');
+    }
+  };
+
+  const handleAiReplyNow = async () => {
+    if (!selectedConv || aiReplying) return;
+    setAiReplying(true);
+    try {
+      await api.post(`/conversations/${selectedConv.id}/ai-reply`);
+      await loadConversations();
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : 'Erro ao acionar resposta da IA agora.'
+      );
+    } finally {
+      setAiReplying(false);
     }
   };
 
@@ -623,6 +641,16 @@ export function ConversationsPage({ waState, onUnreadChange }: Props) {
                 >
                   <TagIcon className="h-3.5 w-3.5" />
                   Tags / Fluxo
+                </button>
+
+                <button
+                  onClick={handleAiReplyNow}
+                  disabled={aiReplying || waState.status === 'DISCONNECTED'}
+                  title="Gera e envia imediatamente uma resposta da IA para a última mensagem deste chat"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-violet-500/30 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-300 hover:bg-violet-500/20 disabled:opacity-50"
+                >
+                  <Bot className="h-3.5 w-3.5" />
+                  {aiReplying ? 'IA respondendo...' : 'Responder com IA'}
                 </button>
 
                 <button

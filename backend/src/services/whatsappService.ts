@@ -448,11 +448,20 @@ class UserWhatsAppSession {
 
     if (simulateTyping) {
       try {
-        await this.sock.presenceSubscribe(jid);
-        await this.sock.sendPresenceUpdate('composing', jid);
+        // Timeout de segurança para presenceSubscribe nunca travar envio em contas Business/@lid
+        await Promise.race([
+          (async () => {
+            await this.sock!.presenceSubscribe(jid);
+            await this.sock!.sendPresenceUpdate('composing', jid);
+          })(),
+          sleep(2000),
+        ]);
         const typingMs = randomInt(3000, 7000);
         await sleep(typingMs);
-        await this.sock.sendPresenceUpdate('paused', jid);
+        await Promise.race([
+          this.sock.sendPresenceUpdate('paused', jid),
+          sleep(1500),
+        ]);
       } catch {
         // Best-effort
       }
@@ -824,6 +833,68 @@ class UserWhatsAppSession {
     }
   }
 
+  public async triggerAiReplyNow(conversationId: string): Promise<{
+    message: Awaited<ReturnType<typeof prisma.message.create>>;
+    ruleName: string;
+    ruleLevel: string;
+  }> {
+    const conv = await prisma.conversation.findFirst({
+      where: { id: conversationId, userId: this.userId },
+      include: { contact: true },
+    });
+    if (!conv) {
+      throw new Error('Conversa não encontrada.');
+    }
+    const contactLabel = conv.contact.name || conv.contact.phone;
+    const reply = await generateConversationReply(this.userId, conversationId);
+    const waMessageId = await this.simulateTypingAndSend(
+      conv.contact.jid,
+      reply.text,
+      true
+    );
+
+    const savedOut = await prisma.message.create({
+      data: {
+        conversationId,
+        waMessageId: waMessageId || undefined,
+        direction: 'OUTBOUND',
+        senderType: 'AI',
+        body: reply.text,
+        status: 'SENT',
+      },
+    });
+
+    const updatedConv = await prisma.conversation.update({
+      where: { id: conversationId },
+      data: {
+        lastMessageAt: new Date(),
+        lastMessagePreview: reply.text.slice(0, 120),
+        ...(reply.shouldTransferToHuman ? { mode: 'MANUAL' } : {}),
+      },
+      include: {
+        contact: { include: { tags: { include: { tag: true } } } },
+        activeRule: true,
+      },
+    });
+
+    emitUserEvent(this.userId, 'message:new', savedOut);
+    emitUserEvent(this.userId, 'conversation:updated', updatedConv);
+    emitUserEvent(this.userId, 'dashboard:refresh', {});
+
+    await logActivity(
+      this.userId,
+      'AI',
+      `IA respondeu ${contactLabel} (Regra ${reply.ruleLevel}: ${reply.ruleName}).`,
+      'SUCCESS'
+    );
+
+    return {
+      message: savedOut,
+      ruleName: reply.ruleName,
+      ruleLevel: reply.ruleLevel,
+    };
+  }
+
   private async respondWithAi(
     conversationId: string,
     jid: string,
@@ -838,6 +909,9 @@ class UserWhatsAppSession {
       ]);
 
       if (!conv || conv.mode !== 'AUTO' || settings?.globalAutomationPaused) {
+        console.log(
+          `[WhatsApp][AI] Ignorando resposta para ${contactLabel} (mode=${conv?.mode}, globalPaused=${settings?.globalAutomationPaused})`
+        );
         return;
       }
 
@@ -894,12 +968,16 @@ class UserWhatsAppSession {
         );
       }
     } catch (err) {
+      const errMsg =
+        err instanceof Error ? err.message : 'Erro desconhecido';
+      console.error(
+        `[WhatsApp][AI] Falha na resposta da IA para ${contactLabel} (${jid}):`,
+        errMsg
+      );
       await logActivity(
         this.userId,
         'AI',
-        `Falha na resposta da IA para ${contactLabel}: ${
-          err instanceof Error ? err.message : 'Erro desconhecido'
-        }`,
+        `Falha na resposta da IA para ${contactLabel}: ${errMsg}`,
         'ERROR'
       );
     }

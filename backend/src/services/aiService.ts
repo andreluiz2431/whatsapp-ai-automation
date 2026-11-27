@@ -353,7 +353,7 @@ async function callGeminiSingleModel(
       contents,
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 600,
+        maxOutputTokens: 2048,
       },
     }),
   });
@@ -365,7 +365,8 @@ async function callGeminiSingleModel(
 
   const data = (await response.json()) as {
     candidates?: Array<{
-      content?: { parts?: Array<{ text?: string }> };
+      content?: { parts?: Array<{ text?: string; thought?: boolean }> };
+      finishReason?: string;
     }>;
     usageMetadata?: {
       promptTokenCount?: number;
@@ -374,16 +375,19 @@ async function callGeminiSingleModel(
     };
   };
 
-  const text = data.candidates?.[0]?.content?.parts
-    ?.map((p) => p.text || '')
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  const visibleParts = parts.filter((p) => !p.thought && p.text);
+  const text = (visibleParts.length > 0 ? visibleParts : parts)
+    .map((p) => p.text || '')
     .join('')
     .trim();
 
   if (!text) {
+    const reason = data.candidates?.[0]?.finishReason || 'UNKNOWN';
     return {
       ok: false,
       status: 500,
-      errText: 'A API Gemini retornou uma resposta vazia.',
+      errText: `A API Gemini retornou uma resposta vazia (finishReason: ${reason}).`,
     };
   }
 
@@ -423,6 +427,8 @@ async function callGemini(
 
   if (contents.length === 0) {
     contents.push({ role: 'user', parts: [{ text: 'Olá' }] });
+  } else if (contents[0].role === 'model') {
+    contents.unshift({ role: 'user', parts: [{ text: '(início da conversa)' }] });
   }
 
   let lastError = '';
